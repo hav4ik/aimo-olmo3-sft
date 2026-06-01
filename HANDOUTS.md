@@ -187,10 +187,11 @@ olmocore deploy image, or `data_prep/convert_hf_to_olmocore.sh` →
 3. **FP8 on Blackwell (RTX 6000)** untested (esp. FP8 + `flex_attention`) — first RTX 6000 run = BF16.
 4. **Exported `generation_config.eos_token_id`** should list **both** `[100265, 100257]` (OLMo-core's HF
    converter does this; for axolotl set at export/serving).
-5. **OLMo-core 32B not wired** — the trainer `Olmo-3-7B-SFT-local.py` is 7B-only (`olmo3_7B`
-   factory). Axolotl 32B IS aligned now (`olmo3-32b-{bf16,fp8}.yaml`, select with
-   `MODEL_SIZE=32b`), but for the *reference* 32B path you'd add an `Olmo-3-32B-SFT-local.py`
-   (beaker-stub AI2's 32B script, same as the 7B) + a `MODEL_SIZE`/arch switch in olmocore/run.sh.
+5. **32B is HELD until the 7B is validated — see `SCALEUP_32B.md`** for the full plan. Axolotl 32B
+   is ready (`olmo3-32b-{bf16,fp8}.yaml`, `MODEL_SIZE=32b`) and recipe-accurate — note the **32B
+   recipe differs from the 7B: lr 1e-4 + 4.19M-tok batch** (vs 5e-5 / 1.05M). The OLMo-core 32B
+   *reference* path is NOT wired yet (trainer `Olmo-3-7B-SFT-local.py` is 7B-only); the held work
+   (stub AI2's `Olmo-3-32B-SFT.py` + a `MODEL_SIZE`/arch switch in olmocore/run.sh) is in SCALEUP_32B.md.
 
 ---
 
@@ -198,4 +199,5 @@ olmocore deploy image, or `data_prep/convert_hf_to_olmocore.sh` →
 - `README.md` — deploy quickstart + env table.
 - `data_prep/` — `prepare.sh` (orchestrator), `normalize.py` (input → messages parquet), `convert_hf_to_olmocore.sh`.
 - `RECIPES.md` — Axolotl vs OLMo-core recipe table · `STABILITY.md` — BF16-vs-FP8 test + FP8 internals.
+- `SCALEUP_32B.md` — the 32B plan (held until the 7B is validated; recipe differs, OLMo-core path to wire).
 - `DATA.md` — token-level chat-template / masking audit (read before changing data format).

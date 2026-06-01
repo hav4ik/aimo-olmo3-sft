@@ -1,7 +1,8 @@
 # Olmo 3 32B SFT — AXOLOTL / BF16. Multi-node (the reference 32b_think_sft uses many
-# nodes); axolotl is the FALLBACK here — OLMo-core is the reference path for 32B. Same recipe
-# as the 7B (lr 5e-5, 2 epochs, global batch 1,048,576 tok, seq 32768), just the 32B model.
-# Select at run time with MODEL_SIZE=32b PRECISION=bf16. Validate the 7B first.
+# nodes); axolotl is the FALLBACK here — OLMo-core is the reference path for 32B. AI2's
+# 32b_think_sft recipe: lr 1e-4, 2 epochs, global batch 4,194,304 tok, seq 32768 — NB the 32B
+# uses a HIGHER lr + 4x batch than the 7B (5e-5 / 1,048,576). Select with MODEL_SIZE=32b.
+# Validate the 7B first; see SCALEUP_32B.md for the full plan.
 
 base_model: allenai/Olmo-3.1-32B-Think
 
@@ -53,13 +54,13 @@ gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
 
-# Recipe global batch = 1,048,576 tok = 32 seqs @ seq 32768. micro 1 x accum x num_gpus = 32:
-# 16 GPUs -> accum 2 (below); 32 GPUs -> accum 1; 8 GPUs -> accum 4. Adjust for your shape.
+# 32B recipe global batch = 4,194,304 tok = 128 seqs @ seq 32768 (4x the 7B). micro 1 x accum
+# x num_gpus = 128: 32 GPUs -> accum 4 (below); 64 -> accum 2; 16 -> accum 8. Adjust for your shape.
 micro_batch_size: 1
-gradient_accumulation_steps: 2
+gradient_accumulation_steps: 4
 
 optimizer: adamw_torch_fused
-learning_rate: 5.0e-5        # think recipe (NOT instruct 8e-5)
+learning_rate: 1.0e-4        # 32B think recipe (32B uses 1e-4, vs the 7B's 5e-5)
 adam_beta1: 0.9
 adam_beta2: 0.95
 weight_decay: 0.0

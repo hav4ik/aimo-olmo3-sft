@@ -11,7 +11,7 @@ olmocore/   sft_scripts/ (AI2's trainer, beaker-stubbed) · run.sh
 axolotl/    configs/ (olmo3-7b-bf16|fp8.yaml) · run.sh
 data_prep/  prepare.sh (offline prep, BOTH frameworks) · normalize.py · convert_hf_to_olmocore.sh
 docker/     Dockerfile.olmocore · Dockerfile.axolotl · build_and_push.sh
-bootstrap.sh  entrypoint.sh   HANDOUTS.md  RECIPES.md  STABILITY.md  DATA.md
+bootstrap.sh  entrypoint.sh   HANDOUTS.md  RECIPES.md  STABILITY.md  DATA.md  SCALEUP_32B.md
 ```
 **New here? Read `HANDOUTS.md`** — the full deploy + data-prep guide for picking this up.
 

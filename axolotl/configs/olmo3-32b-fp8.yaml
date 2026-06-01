@@ -52,12 +52,13 @@ gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
 
-# 16 GPUs -> accum 2 (32 seqs = 1,048,576 tok); 32 GPUs -> accum 1; 8 GPUs -> accum 4.
+# 32B recipe batch = 4,194,304 tok = 128 seqs @ seq 32768 (4x the 7B). 32 GPUs -> accum 4;
+# 64 -> accum 2; 16 -> accum 8.
 micro_batch_size: 1
-gradient_accumulation_steps: 2
+gradient_accumulation_steps: 4
 
 optimizer: adamw_torch_fused
-learning_rate: 5.0e-5
+learning_rate: 1.0e-4        # 32B think recipe (1e-4, vs the 7B's 5e-5)
 adam_beta1: 0.9
 adam_beta2: 0.95
 weight_decay: 0.0
