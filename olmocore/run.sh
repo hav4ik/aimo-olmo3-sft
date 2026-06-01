@@ -10,6 +10,20 @@
 # A single-GPU smoke needs small shapes: SEQ_LEN=2048 GLOBAL_BATCH_SIZE=4096 EPOCHS unset
 #   MAX_STEPS=10 (full recipe defaults are seq 32768 / 1,048,576 tok / 2 epochs, multi-GPU).
 set -euo pipefail
+
+# transformer_engine's _load_nvrtc() does `ldconfig -p | grep libnvrtc.so` at import;
+# the cu13 wheel ships libnvrtc under site-packages/nvidia/cu13/lib which is NOT on the
+# default linker path, so the grep returns non-zero and `import olmo_core.nn.attention`
+# (pulled in by the SFT script) dies with CalledProcessError before any training starts.
+# Put that dir on the ld path so TE imports. Idempotent; needs root (container runs as root).
+if ! ldconfig -p 2>/dev/null | grep -q 'libnvrtc\.so'; then
+    _nvrtc_dir="$(dirname "$(find /opt/conda -name 'libnvrtc.so*' 2>/dev/null | head -1)")"
+    if [ -n "$_nvrtc_dir" ] && [ -w /etc/ld.so.conf.d ]; then
+        echo "$_nvrtc_dir" > /etc/ld.so.conf.d/zz-nvrtc.conf && ldconfig
+        echo "[olmocore] added $_nvrtc_dir to ld path (libnvrtc/TE fix)"
+    fi
+fi
+
 DATA=/data/training
 NPROC="${NPROC_PER_NODE:-$(nvidia-smi -L | wc -l)}"
 HF_MODEL="${HF_MODEL:-allenai/Olmo-3-7B-Think}"
@@ -32,6 +46,8 @@ export OLMO_SFT_SAVE_ROOT="$DATA/checkpoints"
 
 # prepped by data_prep/prepare.sh --name $DATASET_NAME (-> $DATA/datasets/$NAME/olmocore)
 DATASET="${DATASET:-$DATA/datasets/${DATASET_NAME:-tulu-math}/olmocore}"
+# fail fast (before the multi-GPU spin-up) if the tokenized data isn't there
+ls "$DATASET"/token_ids_part_*.npy >/dev/null 2>&1 || { echo "ERROR: no tokenized data in $DATASET — run data_prep/prepare.sh --name ${DATASET_NAME:-tulu-math}"; exit 3; }
 RUN_NAME="${RUN_NAME:-olmo3-7b-sft-$PRECISION}"
 DUR_UNIT="${DUR_UNIT:-epochs}"; DUR_VAL="${EPOCHS:-2}"
 [ -n "${MAX_STEPS:-}" ] && { DUR_UNIT=steps; DUR_VAL="$MAX_STEPS"; }

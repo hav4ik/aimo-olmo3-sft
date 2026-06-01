@@ -42,11 +42,11 @@ pad_to_sequence_len: true    # fixed shape -> torch.compile doesn't recompile pe
 
 attn_implementation: flash_attention_3   # FA3 packed-varlen on Hopper (baked in the image)
 
-# NeMo mixed-precision Pattern B — fp32-resident master + optimizer state for clean
-# full-param convergence. We deliberately do NOT set bf16/bfloat16: that loads
-# weights bf16-resident with no fp32 master, so fused AdamW would keep bf16 m/v
-# (NeMo documents this as silent convergence degradation). Unset => fp32 master;
-# FSDP2 casts to bf16 for fwd/bwd via mixed_precision_policy below.
+# Precision: axolotl's bf16 defaults to "auto" and resolves TRUE on Hopper, so this trains in
+# standard bf16 mixed precision — bf16-resident params + FSDP2 mixed_precision_policy bf16 below.
+# NB (audit-confirmed): this is NOT an fp32-resident master; adamw_torch_fused keeps bf16-derived
+# optimizer state. Fine for a 2-epoch SFT. If you need bf16-param/fp32-reduce, that's the OLMo-core
+# reference path (axolotl doesn't expose fp32-master via the bf16 key). tf32 on for fp32 matmuls.
 tf32: true
 
 # Compile ON (parity with the FP8 variant, which REQUIRES it, and with OLMo-core's

@@ -13,7 +13,7 @@ PRECISION="${PRECISION:-bf16}"
 MODEL_SIZE="${MODEL_SIZE:-7b}"   # 7b | 32b (32b = the axolotl fallback path for the big tier)
 CONFIG="${CONFIG:-/workspace/code/axolotl/configs/olmo3-${MODEL_SIZE}-${PRECISION}.yaml}"
 PARQUET="${DATASET_PARQUET:-$DATA/datasets/${DATASET_NAME:-tulu-math}/messages.parquet}"
-[ -f "$PARQUET" ] || { echo "ERROR: prepped data not found: $PARQUET — run data_prep/prepare.sh --name ${DATASET_NAME:-tulu-math}"; exit 3; }
+[ -s "$PARQUET" ] || { echo "ERROR: prepped data missing/empty: $PARQUET — run data_prep/prepare.sh --name ${DATASET_NAME:-tulu-math}"; exit 3; }
 
 CC="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1)"
 case "$CC" in 9.*) DEFATTN=flash_attention_3 ;; *) DEFATTN=flex_attention ;; esac
