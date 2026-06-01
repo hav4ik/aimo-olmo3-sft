@@ -1,0 +1,93 @@
+# Olmo 3 7B SFT — AXOLOTL / BF16 (the precision baseline)
+#
+# Recipe = AI2's 7b_think_sft: lr 5e-5, 2 epochs, global batch 1,048,576 tokens
+# (8 GPUs x micro 1 x accum 4 x seq 32768), SkipStepAdamW-equivalent fused AdamW,
+# olmo chat template. This is the BF16 half of the BF16-vs-FP8 stability A/B; the
+# FP8 half (olmo3-7b-fp8.yaml) is IDENTICAL except for the fp8 block, so any loss
+# difference is attributable to precision alone. Target: 8x H100/H200, single node.
+
+base_model: allenai/Olmo-3-7B-Think
+
+# eos = <|endoftext|> (100257): what the olmo template renders at the end of the
+# final assistant turn. Olmo 3 declares BOTH <|im_end|>(100265) and <|endoftext|>
+# as eos, so the served model stops on either — no data-format change needed. Set
+# the EXPORTED model's generation_config.eos_token_id = [100265, 100257] at the end.
+# VERIFY on run 1 that the terminator token is TRAINED (unmasked) or the model won't
+# learn to stop (a known IFEval-gap cause).
+special_tokens:
+  eos_token: "<|endoftext|>"
+
+# Cut Cross Entropy — fuses lm_head into the loss so full [vocab] logits are never
+# materialized (big memory win at 32k). Compile-compatible.
+plugins:
+  - axolotl.integrations.cut_cross_entropy.CutCrossEntropyPlugin
+
+# Canonical olmo chat template (AI2's reference — same jinja open-instruct uses to
+# tokenize the OLMo-core side, so both engines see byte-identical prompting).
+chat_template: jinja
+chat_template_jinja: /workspace/code/axolotl/olmo_chat_template.jinja
+datasets:
+  - path: allenai/tulu-3-sft-personas-math
+    type: chat_template
+    field_messages: messages
+    split: train
+dataset_prepared_path: /data/last_run_prepared
+val_set_size: 0.0
+
+sequence_len: 32768          # recipe seq len
+sample_packing: true
+pad_to_sequence_len: true    # fixed shape -> torch.compile doesn't recompile per batch
+
+attn_implementation: flash_attention_3   # FA3 packed-varlen on Hopper (baked in the image)
+
+# NeMo mixed-precision Pattern B — fp32-resident master + optimizer state for clean
+# full-param convergence. We deliberately do NOT set bf16/bfloat16: that loads
+# weights bf16-resident with no fp32 master, so fused AdamW would keep bf16 m/v
+# (NeMo documents this as silent convergence degradation). Unset => fp32 master;
+# FSDP2 casts to bf16 for fwd/bwd via mixed_precision_policy below.
+tf32: true
+
+# Compile ON (parity with the FP8 variant, which REQUIRES it, and with OLMo-core's
+# compile_model=True) so the only BF16-vs-FP8 difference is precision, not graph mode.
+torch_compile: true
+torch_compile_backend: inductor
+
+fsdp_version: 2
+fsdp_config:
+  offload_params: false
+  cpu_ram_efficient_loading: true
+  auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  transformer_layer_cls_to_wrap: Olmo3DecoderLayer
+  state_dict_type: FULL_STATE_DICT
+  reshard_after_forward: true
+  mixed_precision_policy: bf16   # bf16 compute on the fp32-resident master (Pattern B)
+
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+
+# 8 GPUs x micro 1 x accum 4 x seq 32768 = 1,048,576 tokens/step (recipe global batch).
+# For 16 GPUs use accum 2; for 4 GPUs use accum 8 — keep the product at 1,048,576.
+micro_batch_size: 1
+gradient_accumulation_steps: 4
+
+optimizer: adamw_torch_fused
+learning_rate: 5.0e-5        # think recipe (NOT instruct 8e-5)
+adam_beta1: 0.9
+adam_beta2: 0.95
+weight_decay: 0.0
+max_grad_norm: 1.0
+lr_scheduler: linear
+warmup_ratio: 0.03
+num_epochs: 2
+
+save_strategy: steps
+save_steps: 500
+save_total_limit: 5
+logging_steps: 1             # per-step loss/grad-norm so spikes are visible for the A/B
+output_dir: /data/checkpoints/olmo3-7b-bf16
+
+wandb_project: olmo3-sft
+wandb_name: olmo3-7b-bf16
+
+seed: 42

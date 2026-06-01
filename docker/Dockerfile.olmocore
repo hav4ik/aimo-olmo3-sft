@@ -1,0 +1,16 @@
+# Vast.AI / cluster deploy image for OLMo-core SFT.
+# Thin layer on our prebuilt base (AI2's deps + olmo_core source + FA2 sm90;100;120 + FA3 + FA4).
+# Bakes ONLY the bootstrap (which clones the code repo at runtime). No code, no secrets, no data.
+# Build context = repo root:  docker build -f docker/Dockerfile.olmocore -t hav4ik/olmo3-olmocore:cu130 .
+ARG BASE=olmo-core-sft:cu130
+FROM ${BASE}
+
+COPY bootstrap.sh /usr/local/bin/bootstrap.sh
+RUN chmod +x /usr/local/bin/bootstrap.sh && (command -v git >/dev/null || (apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*))
+
+ENV CODE_REPO=https://github.com/hav4ik/aimo-olmo3-sft \
+    CODE_BRANCH=olmo3-sft \
+    CODE_DIR=/workspace/code \
+    HF_HOME=/data/training/hf_cache
+WORKDIR /workspace
+ENTRYPOINT ["/usr/local/bin/bootstrap.sh"]

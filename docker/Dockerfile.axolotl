@@ -1,0 +1,18 @@
+# Vast.AI / cluster deploy image for Axolotl SFT.
+# Thin layer on our prebuilt axolotl base (official axolotl-uv cu130 + FA3 wheel + NCCL env).
+# Bakes ONLY the bootstrap (clones the code repo at runtime). No code, no secrets, no data.
+# Build context = repo root:  docker build -f docker/Dockerfile.axolotl -t hav4ik/olmo3-axolotl:cu130 .
+ARG BASE=axolotl-olmo3-sft:0.1.0
+FROM ${BASE}
+
+USER root
+COPY bootstrap.sh /usr/local/bin/bootstrap.sh
+RUN chmod +x /usr/local/bin/bootstrap.sh && (command -v git >/dev/null || (apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*))
+
+ENV CODE_REPO=https://github.com/hav4ik/aimo-olmo3-sft \
+    CODE_BRANCH=olmo3-sft \
+    CODE_DIR=/workspace/code \
+    HF_HOME=/data/training/hf_cache
+WORKDIR /workspace
+# Override the base image's uv-entrypoint; axolotl/run.sh sources the venv itself.
+ENTRYPOINT ["/usr/local/bin/bootstrap.sh"]
