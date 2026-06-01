@@ -22,10 +22,11 @@ special_tokens:
 plugins:
   - axolotl.integrations.cut_cross_entropy.CutCrossEntropyPlugin
 
-# Canonical olmo chat template (AI2's reference — same jinja open-instruct uses to
-# tokenize the OLMo-core side, so both engines see byte-identical prompting).
-chat_template: jinja
-chat_template_jinja: /workspace/code/axolotl/olmo_chat_template.jinja
+# Use the model's OWN chat template: Olmo-3-7B-Think ships chat_template.jinja (think-aware,
+# the exact format it was post-trained/served with) and transformers loads it automatically —
+# no custom file to keep in sync. NB this is the THINK template, which differs from the generic
+# open-instruct `olmo` template the OLMo-core data-prep currently uses (align that for parity).
+chat_template: tokenizer_default
 datasets:
   - path: allenai/tulu-3-sft-personas-math
     type: chat_template

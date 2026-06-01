@@ -8,7 +8,7 @@ precision arms each (**BF16** / **FP8**). The heavy deps live in prebuilt Docker
 
 ```
 olmocore/   sft_scripts/ (AI2's trainer, beaker-stubbed) · launch/ · data_prep/ · run.sh
-axolotl/    configs/ (olmo3-7b-bf16|fp8.yaml) · olmo_chat_template.jinja · run.sh
+axolotl/    configs/ (olmo3-7b-bf16|fp8.yaml) · run.sh
 docker/     Dockerfile.olmocore · Dockerfile.axolotl · build_and_push.sh
 bootstrap.sh  entrypoint.sh   RECIPES.md  STABILITY.md  DATA.md
 ```

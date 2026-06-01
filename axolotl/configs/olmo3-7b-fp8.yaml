@@ -22,8 +22,8 @@ special_tokens:
 plugins:
   - axolotl.integrations.cut_cross_entropy.CutCrossEntropyPlugin
 
-chat_template: jinja
-chat_template_jinja: /workspace/code/axolotl/olmo_chat_template.jinja
+# Model's own think-aware template (see olmo3-7b-bf16.yaml); transformers loads chat_template.jinja.
+chat_template: tokenizer_default
 datasets:
   - path: allenai/tulu-3-sft-personas-math
     type: chat_template
