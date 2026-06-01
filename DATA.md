@@ -1,9 +1,16 @@
 # Data & prompting — audit reference
 
-The SFT data recipe shared by both tracks (`olmo3-axolotl-sft`, `olmo3-olmocore-runs`).
+The SFT data recipe shared by both frameworks (`axolotl/` + `olmocore/` in this repo).
 **Principle:** data is the most important part of the pipeline, so we keep the
-custom layer thin and lean on each repo's own machinery. This file shows exactly
+custom layer thin and lean on each framework's own machinery. This file shows exactly
 what the model sees, token by token, so it can be audited.
+
+> **NOTE (current):** since switching the base to `Olmo-3-7B-Think`, the template is
+> **think-aware** — axolotl uses `chat_template: tokenizer_default` (the model's own
+> `chat_template.jinja`) and OLMo-core uses open-instruct's `olmo_thinker` (via
+> `data_prep/prepare.sh --template`). The token-level examples below were written for the
+> generic `olmo` template; they still illustrate the MASKING PRINCIPLE (assistant content +
+> eos trained, system/user/headers masked), but the exact think-template bytes differ.
 
 ## Source of truth: OLMo's own stack
 
@@ -13,13 +20,12 @@ to that stack rather than hand-rolling tokenization:
 - **OLMo-core side**: tokenized by open-instruct's canonical
   `scripts/data/convert_sft_data_for_olmocore.py` with its registered **`olmo`**
   chat template, run in a dedicated data-prep image
-  (`open-instruct/Dockerfile.dataprep`) via `data_prep/convert_sft_data.sh`. This
+  (`open-instruct/Dockerfile.dataprep`) via `data_prep/prepare.sh`. This
   is the exact tool/template Olmo 3 was trained with → correct masking and the
   OLMo-core `.npy` format, no custom code.
-- **axolotl side**: uses axolotl's native `chat_template` machinery, pointed at
-  the *same* olmo template (`runs/olmo_chat_template.jinja`, extracted verbatim
-  from open-instruct's registry) via `chat_template_jinja`. axolotl computes the
-  mask itself.
+- **axolotl side**: uses axolotl's native `chat_template` machinery with
+  `chat_template: tokenizer_default` → the model's own think-aware `chat_template.jinja`
+  (shipped with `Olmo-3-7B-Think`). axolotl computes the mask itself.
 
 Both therefore use the **same olmo template** and the **same masking policy**,
 verified below to agree token-for-token.
@@ -85,8 +91,8 @@ not a masking difference.
 
 ## How each framework consumes the data (offline tokenization; training never tokenizes)
 
-- **OLMo-core**: `convert_sft_data.sh` (open-instruct) → `token_ids_part_*.npy` +
-  `labels_mask_part_*.npy` (offline). `olmo3_sft_local.py` memory-maps the `.npy`;
+- **OLMo-core**: `prepare.sh` (open-instruct) → `token_ids_part_*.npy` +
+  `labels_mask_part_*.npy` (offline). `Olmo-3-7B-SFT-local.py` memory-maps the `.npy`;
   it never tokenizes. Packer splits documents on `<|endoftext|>`.
 - **axolotl**: `axolotl preprocess` tokenizes once into `dataset_prepared_path`
   (offline) with the olmo template; `axolotl train` reads that cache.

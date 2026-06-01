@@ -30,16 +30,26 @@ export OLMO_ATTN_BACKEND="${OLMO_ATTN_BACKEND:-$DEFATTN}"
 export OLMO_SFT_SAVE_ROOT="$DATA/checkpoints"
 [ "$PRECISION" = "fp8" ] && export OLMO_FP8="${OLMO_FP8:-rowwise}"   # rowwise + all-attn BF16 (DeepSeek)
 
-DATASET="${DATASET:-$DATA/datasets/tulu-math-olmocore-oi}"
+# prepped by data_prep/prepare.sh --name $DATASET_NAME (-> $DATA/datasets/$NAME/olmocore)
+DATASET="${DATASET:-$DATA/datasets/${DATASET_NAME:-tulu-math}/olmocore}"
 RUN_NAME="${RUN_NAME:-olmo3-7b-sft-$PRECISION}"
 DUR_UNIT="${DUR_UNIT:-epochs}"; DUR_VAL="${EPOCHS:-2}"
 [ -n "${MAX_STEPS:-}" ] && { DUR_UNIT=steps; DUR_VAL="$MAX_STEPS"; }
 
-echo "[olmocore] $PRECISION | $NPROC GPU(s) cc=$CC | attn=$OLMO_ATTN_BACKEND | fp8=${OLMO_FP8:-off} | $DUR_VAL $DUR_UNIT"
-exec torchrun --standalone --nnodes=1 --nproc_per_node="$NPROC" \
+# Single node by default; multi-node (e.g. 16xH200) via NNODES + NODE_RANK + HEAD_NODE_IP.
+NNODES="${NNODES:-1}"
+if [ "$NNODES" -gt 1 ]; then
+    RDZV=(--nnodes="$NNODES" --node_rank="${NODE_RANK:-0}" --rdzv_id="$RUN_NAME" \
+          --rdzv_backend=c10d --rdzv_endpoint="${HEAD_NODE_IP:-127.0.0.1}:${NCCL_PORT:-29400}")
+else
+    RDZV=(--standalone --nnodes=1)
+fi
+
+echo "[olmocore] $PRECISION | ${NNODES}x${NPROC} GPU cc=$CC | attn=$OLMO_ATTN_BACKEND | fp8=${OLMO_FP8:-off} | $DUR_VAL $DUR_UNIT | data=$DATASET"
+exec torchrun "${RDZV[@]}" --nproc_per_node="$NPROC" \
     /workspace/code/olmocore/sft_scripts/Olmo-3-7B-SFT-local.py \
     train "$RUN_NAME" "$CKPT" "${CLUSTER:-local_h100}" \
-    --seq_len="${SEQ_LEN:-32768}" --num_nodes=1 \
+    --seq_len="${SEQ_LEN:-32768}" --num_nodes="$NNODES" \
     --global_batch_size="${GLOBAL_BATCH_SIZE:-1048576}" \
     --dataset_path="$DATASET" \
     --train_module.optim.lr="${LR:-5e-5}" \

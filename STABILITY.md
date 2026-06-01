@@ -3,26 +3,28 @@
 A 2×2: each framework gets a **BF16** arm (precision baseline) and an **FP8** arm,
 **identical except precision**, so any loss/grad difference isolates FP8.
 
+Each arm is just `FRAMEWORK` × `PRECISION` on the deploy images (same image, env-selected):
+
 | | OLMo-core (reference) | Axolotl (fallback) |
 |---|---|---|
-| **BF16** | `launch/launch_7b_bf16.sh` | `runs/configs/olmo3-7b-bf16.yaml` |
-| **FP8**  | `launch/launch_7b_fp8.sh`  | `runs/configs/olmo3-7b-fp8.yaml`  |
+| **BF16** | `FRAMEWORK=olmocore PRECISION=bf16` | `FRAMEWORK=axolotl PRECISION=bf16` |
+| **FP8**  | `FRAMEWORK=olmocore PRECISION=fp8` (rowwise + all-attn BF16) | `FRAMEWORK=axolotl PRECISION=fp8` (accelerate tensorwise) |
 
 Recipe (all four): AI2 `7b_think_sft` — lr 5e-5, 2 epochs, global batch 1,048,576 tok,
-seq 32768, olmo template, FA3 packed-varlen, auto-CP (cp_degree=2). `logging_steps: 1`
+seq 32768, think template, FA3 packed-varlen, auto-CP (cp_degree=2). `logging_steps: 1`
 so per-step loss/grad-norm are visible.
 
 ## Run
+Prep data once (`data_prep/prepare.sh --name <NAME> ...`), then flip the env on the images:
 ```bash
-# OLMo-core (8xH200, single node)
-cd olmo3-olmocore-runs && NPROC_PER_NODE=8 ./launch/launch_7b_bf16.sh
-                          NPROC_PER_NODE=8 ./launch/launch_7b_fp8.sh
-# Axolotl (8xH100/H200)
-cd olmo3-axolotl-sft && ./runs/scripts/launch.sh olmo3-7b-bf16 8
-                        ./runs/scripts/launch.sh olmo3-7b-fp8  8
+for FW in olmocore axolotl; do for P in bf16 fp8; do
+  docker run --rm --gpus all -v /data/training:/data/training \
+    -e HF_TOKEN=$HF_TOKEN -e WANDB_API_KEY=$WANDB_API_KEY \
+    -e FRAMEWORK=$FW -e PRECISION=$P -e DATASET_NAME=<NAME> -e MAX_STEPS=300 \
+    hav4ik/olmo3-$FW:cu130
+done; done
 ```
-For a quick probe, cap steps (OLMo-core: `--trainer.max_duration.value=300 --trainer.max_duration.unit=steps`;
-axolotl: add `max_steps: 300`) — ~300 steps is enough to see divergence.
+~300 steps is enough to see divergence. (OLMo-core needs `STAGE=convert` once first.)
 
 ## What to compare (stability signals)
 1. **Loss-curve parity** — FP8 should track BF16 within ~1% (DeepSeek report <0.25%, Nemotron ~99% recovery). A widening gap or higher floor = instability.

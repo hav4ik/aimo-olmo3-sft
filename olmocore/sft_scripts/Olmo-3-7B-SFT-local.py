@@ -28,7 +28,7 @@ cp_degree (=2 at seq 32768 on H100/H200; cap is 16384 tok/rank, doubled on B200)
 To run AI2's 7b_think_sft recipe, pass the SAME CLI overrides their open-instruct
 script does: `--train_module.optim.lr=5e-5`, `--trainer.max_duration.value=2
 --trainer.max_duration.unit=epochs`, `--global_batch_size=1048576`,
-`--seq_len=32768` (see launch/launch_7b_hopper.sh).
+`--seq_len=32768` (see olmocore/run.sh).
 """
 
 import argparse

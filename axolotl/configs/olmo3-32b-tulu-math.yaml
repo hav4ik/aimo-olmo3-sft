@@ -35,7 +35,7 @@ attn_implementation: flash_attention_3   # Hopper (H200); FA3 baked into the ima
 # as silent convergence degradation (7-bit mantissa swamps small EMA updates).
 # Leaving them unset loads weights fp32-resident (master + m + v in fp32); FSDP2
 # casts params to bf16 for the forward/backward via mixed_precision_policy below.
-# VERIFY on the first Hopper step that optimizer state dtype is float32 (RUNBOOK).
+# VERIFY on the first Hopper step that optimizer state dtype is float32 on run 1.
 tf32: true
 
 # True FP8 (tensorwise e4m3) on Hopper via torchao. The three knobs go together:

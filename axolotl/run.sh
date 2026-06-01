@@ -1,24 +1,27 @@
 #!/bin/bash
-# In-container Axolotl SFT run. Axolotl pulls the dataset + base model from the HF Hub
-# (cached under HF_HOME=/data/training/hf_cache), so no offline data-prep is needed — just
-# HF_TOKEN in the env. attn_implementation is auto-picked from GPU arch: sm_90 (H100/H200)
-# -> flash_attention_3; anything else incl. sm_120 (RTX PRO 6000 / Blackwell) -> flex_attention
-# (FA3 is Hopper-only). Override via ATTN_IMPL. Checkpoints under /data/training.
-#   PRECISION=bf16|fp8  (default bf16) -> picks configs/olmo3-7b-<precision>.yaml
-#   For a single-GPU smoke: SEQUENCE_LEN=2048 MAX_STEPS=10 (full recipe is seq 32768 / 2 ep).
+# In-container Axolotl SFT run. Reads the OFFLINE-prepped local parquet produced by
+# data_prep/prepare.sh --name $DATASET_NAME  (-> /data/training/datasets/$NAME/messages.parquet);
+# the base model downloads from HF (HF_TOKEN). attn auto by GPU arch: sm_90 (H100/H200) ->
+# flash_attention_3; else (sm_120 RTX PRO 6000 / Blackwell) -> flex_attention. Ckpts under /data/training.
+#   PRECISION=bf16|fp8 -> configs/olmo3-7b-<precision>.yaml ; DATASET_NAME selects the data.
+#   Single-GPU smoke: SEQUENCE_LEN=2048 MAX_STEPS=10 (full recipe = seq 32768 / 2 epochs).
 set -euo pipefail
 [ -f /workspace/axolotl-venv/bin/activate ] && source /workspace/axolotl-venv/bin/activate
-
 DATA=/data/training
 NPROC="${NPROC_PER_NODE:-$(nvidia-smi -L | wc -l)}"
 PRECISION="${PRECISION:-bf16}"
 CONFIG="${CONFIG:-/workspace/code/axolotl/configs/olmo3-7b-${PRECISION}.yaml}"
+PARQUET="${DATASET_PARQUET:-$DATA/datasets/${DATASET_NAME:-tulu-math}/messages.parquet}"
+[ -f "$PARQUET" ] || { echo "ERROR: prepped data not found: $PARQUET — run data_prep/prepare.sh --name ${DATASET_NAME:-tulu-math}"; exit 3; }
 
 CC="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1)"
 case "$CC" in 9.*) DEFATTN=flash_attention_3 ;; *) DEFATTN=flex_attention ;; esac
 ATTN="${ATTN_IMPL:-$DEFATTN}"
 
-# axolotl CLI overrides (key=value) layered on the yaml — keep paths under /data/training.
+# materialize the config with the prepped parquet path substituted in
+CFG=/tmp/axolotl-config.yaml
+sed "s|__DATASET_PARQUET__|$PARQUET|g" "$CONFIG" > "$CFG"
+
 OVERRIDES=(
     "--attn_implementation=$ATTN"
     "--output_dir=$DATA/checkpoints/olmo3-7b-axolotl-$PRECISION"
@@ -26,8 +29,8 @@ OVERRIDES=(
 )
 [ -n "${SEQUENCE_LEN:-}" ] && OVERRIDES+=("--sequence_len=$SEQUENCE_LEN")
 [ -n "${MAX_STEPS:-}"    ] && OVERRIDES+=("--max_steps=$MAX_STEPS")
-# FP8 on Blackwell sm_120: flex_attention can't pair with torchao fp8's compile path the
-# same way FA does — if you hit issues, run the BF16 arm on RTX 6000 and FP8 on Hopper.
+# FP8 on Blackwell sm_120: flex_attention + torchao-fp8 compile path is untested — for the
+# first RTX 6000 run use BF16; FP8 is the proven path on Hopper.
 
-echo "[axolotl] $PRECISION | $NPROC GPU(s) cc=$CC | attn=$ATTN | config=$(basename "$CONFIG")"
-exec accelerate launch --num_processes="$NPROC" -m axolotl.cli.train "$CONFIG" "${OVERRIDES[@]}"
+echo "[axolotl] $PRECISION | $NPROC GPU cc=$CC | attn=$ATTN | data=$PARQUET | config=$(basename "$CONFIG")"
+exec accelerate launch --num_processes="$NPROC" -m axolotl.cli.train "$CFG" "${OVERRIDES[@]}"
