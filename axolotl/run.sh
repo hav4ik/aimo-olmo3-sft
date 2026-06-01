@@ -3,14 +3,15 @@
 # data_prep/prepare.sh --name $DATASET_NAME  (-> /data/training/datasets/$NAME/messages.parquet);
 # the base model downloads from HF (HF_TOKEN). attn auto by GPU arch: sm_90 (H100/H200) ->
 # flash_attention_3; else (sm_120 RTX PRO 6000 / Blackwell) -> flex_attention. Ckpts under /data/training.
-#   PRECISION=bf16|fp8 -> configs/olmo3-7b-<precision>.yaml ; DATASET_NAME selects the data.
+#   MODEL_SIZE=7b|32b + PRECISION=bf16|fp8 -> configs/olmo3-<size>-<precision>.yaml ; DATASET_NAME = data.
 #   Single-GPU smoke: SEQUENCE_LEN=2048 MAX_STEPS=10 (full recipe = seq 32768 / 2 epochs).
 set -euo pipefail
 [ -f /workspace/axolotl-venv/bin/activate ] && source /workspace/axolotl-venv/bin/activate
 DATA=/data/training
 NPROC="${NPROC_PER_NODE:-$(nvidia-smi -L | wc -l)}"
 PRECISION="${PRECISION:-bf16}"
-CONFIG="${CONFIG:-/workspace/code/axolotl/configs/olmo3-7b-${PRECISION}.yaml}"
+MODEL_SIZE="${MODEL_SIZE:-7b}"   # 7b | 32b (32b = the axolotl fallback path for the big tier)
+CONFIG="${CONFIG:-/workspace/code/axolotl/configs/olmo3-${MODEL_SIZE}-${PRECISION}.yaml}"
 PARQUET="${DATASET_PARQUET:-$DATA/datasets/${DATASET_NAME:-tulu-math}/messages.parquet}"
 [ -f "$PARQUET" ] || { echo "ERROR: prepped data not found: $PARQUET — run data_prep/prepare.sh --name ${DATASET_NAME:-tulu-math}"; exit 3; }
 
@@ -24,7 +25,7 @@ sed "s|__DATASET_PARQUET__|$PARQUET|g" "$CONFIG" > "$CFG"
 
 OVERRIDES=(
     "--attn_implementation=$ATTN"
-    "--output_dir=$DATA/checkpoints/olmo3-7b-axolotl-$PRECISION"
+    "--output_dir=$DATA/checkpoints/olmo3-${MODEL_SIZE}-axolotl-$PRECISION"
     "--dataset_prepared_path=$DATA/last_run_prepared"
 )
 [ -n "${SEQUENCE_LEN:-}" ] && OVERRIDES+=("--sequence_len=$SEQUENCE_LEN")

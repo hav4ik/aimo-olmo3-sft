@@ -68,6 +68,7 @@ FP8: `-e PRECISION=fp8`. **Full env contract + data-prep guide in `HANDOUTS.md`.
 |---|---|
 | `FRAMEWORK` | `olmocore` \| `axolotl` (unset ⇒ shell) |
 | `PRECISION` | `bf16` (default) \| `fp8` |
+| `MODEL_SIZE` | axolotl only: `7b` (default) \| `32b` → `configs/olmo3-<size>-<precision>.yaml` |
 | `STAGE` | olmocore only: `train` (default) \| `convert` (HF→distcp checkpoint, run once) |
 | `DATASET_NAME` | which prepped dataset under `/data/training/datasets/<NAME>/` to train on |
 | `NPROC_PER_NODE` | GPUs/node (default = all visible) |

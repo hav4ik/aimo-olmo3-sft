@@ -1,0 +1,78 @@
+# Olmo 3 32B SFT — AXOLOTL / FP8. IDENTICAL to olmo3-32b-bf16.yaml except the fp8 block, so the
+# BF16-vs-FP8 delta isolates precision. axolotl FP8 = accelerate + torchao TENSORWISE e4m3 (no
+# granularity / module-exclusion control — coarser than OLMo-core's rowwise + all-attention-BF16;
+# if it's less stable, that's why). FP8 on the LINEARS only (no fp8 attention). Requires
+# torch_compile + FSDP2. Select with MODEL_SIZE=32b PRECISION=fp8. Validate the BF16 arm first.
+
+base_model: allenai/Olmo-3.1-32B-Think
+
+special_tokens:
+  eos_token: "<|endoftext|>"
+
+plugins:
+  - axolotl.integrations.cut_cross_entropy.CutCrossEntropyPlugin
+
+chat_template: tokenizer_default
+# Local parquet from data_prep/prepare.sh; axolotl/run.sh substitutes the real path (DATASET_NAME).
+datasets:
+  - path: __DATASET_PARQUET__
+    ds_type: parquet
+    type: chat_template
+    field_messages: messages
+dataset_prepared_path: /data/last_run_prepared
+val_set_size: 0.0
+
+sequence_len: 32768
+sample_packing: true
+pad_to_sequence_len: true
+
+attn_implementation: flash_attention_3
+
+tf32: true
+
+# === THE ONLY DIFFERENCE FROM olmo3-32b-bf16.yaml ===
+fp8: true
+fp8_enable_fsdp_float8_all_gather: true
+# ====================================================
+
+torch_compile: true
+torch_compile_backend: inductor
+
+fsdp_version: 2
+fsdp_config:
+  offload_params: false
+  cpu_ram_efficient_loading: true
+  auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  transformer_layer_cls_to_wrap: Olmo3DecoderLayer
+  state_dict_type: FULL_STATE_DICT
+  reshard_after_forward: true
+  mixed_precision_policy: bf16
+
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+
+# 16 GPUs -> accum 2 (32 seqs = 1,048,576 tok); 32 GPUs -> accum 1; 8 GPUs -> accum 4.
+micro_batch_size: 1
+gradient_accumulation_steps: 2
+
+optimizer: adamw_torch_fused
+learning_rate: 5.0e-5
+adam_beta1: 0.9
+adam_beta2: 0.95
+weight_decay: 0.0
+max_grad_norm: 1.0
+lr_scheduler: linear
+warmup_ratio: 0.03
+num_epochs: 2
+
+save_strategy: steps
+save_steps: 500
+save_total_limit: 3
+logging_steps: 1
+output_dir: /data/checkpoints/olmo3-32b-axolotl-fp8
+
+wandb_project: olmo3-sft
+wandb_name: olmo3-32b-fp8
+
+seed: 42

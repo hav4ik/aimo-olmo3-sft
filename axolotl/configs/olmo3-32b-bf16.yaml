@@ -1,0 +1,80 @@
+# Olmo 3 32B SFT — AXOLOTL / BF16. Multi-node (the reference 32b_think_sft uses many
+# nodes); axolotl is the FALLBACK here — OLMo-core is the reference path for 32B. Same recipe
+# as the 7B (lr 5e-5, 2 epochs, global batch 1,048,576 tok, seq 32768), just the 32B model.
+# Select at run time with MODEL_SIZE=32b PRECISION=bf16. Validate the 7B first.
+
+base_model: allenai/Olmo-3.1-32B-Think
+
+# eos = <|endoftext|> (the model's native stop). Olmo 3 declares both <|im_end|>(100265) +
+# <|endoftext|>(100257) as eos. With tokenizer_default the model's own tokenizer eos governs.
+special_tokens:
+  eos_token: "<|endoftext|>"
+
+plugins:
+  - axolotl.integrations.cut_cross_entropy.CutCrossEntropyPlugin
+
+# The model's OWN think-aware template (Olmo-3.1-32B-Think ships chat_template.jinja;
+# transformers loads it). Real 32B SFT data should carry <think>...</think> to match.
+chat_template: tokenizer_default
+# Local parquet from data_prep/prepare.sh; axolotl/run.sh substitutes the real path (DATASET_NAME).
+datasets:
+  - path: __DATASET_PARQUET__
+    ds_type: parquet
+    type: chat_template
+    field_messages: messages
+dataset_prepared_path: /data/last_run_prepared
+val_set_size: 0.0
+
+sequence_len: 32768          # recipe seq len
+sample_packing: true
+pad_to_sequence_len: true    # fixed shape -> torch.compile doesn't recompile per batch
+
+attn_implementation: flash_attention_3   # H200; run.sh overrides per GPU arch
+
+# NeMo mixed-precision Pattern B — fp32-resident master + optimizer state for clean full-param
+# convergence. Do NOT set bf16/bfloat16 (that loads weights bf16-resident with no fp32 master,
+# so fused AdamW keeps bf16 m/v — NeMo-documented silent degradation). Unset => fp32 master;
+# FSDP2 casts to bf16 for fwd/bwd via mixed_precision_policy below.
+tf32: true
+torch_compile: true          # parity with the FP8 variant (which requires it)
+torch_compile_backend: inductor
+
+fsdp_version: 2
+fsdp_config:
+  offload_params: false
+  cpu_ram_efficient_loading: true
+  auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  transformer_layer_cls_to_wrap: Olmo3DecoderLayer
+  state_dict_type: FULL_STATE_DICT
+  reshard_after_forward: true
+  mixed_precision_policy: bf16
+
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+
+# Recipe global batch = 1,048,576 tok = 32 seqs @ seq 32768. micro 1 x accum x num_gpus = 32:
+# 16 GPUs -> accum 2 (below); 32 GPUs -> accum 1; 8 GPUs -> accum 4. Adjust for your shape.
+micro_batch_size: 1
+gradient_accumulation_steps: 2
+
+optimizer: adamw_torch_fused
+learning_rate: 5.0e-5        # think recipe (NOT instruct 8e-5)
+adam_beta1: 0.9
+adam_beta2: 0.95
+weight_decay: 0.0
+max_grad_norm: 1.0
+lr_scheduler: linear
+warmup_ratio: 0.03
+num_epochs: 2
+
+save_strategy: steps
+save_steps: 500
+save_total_limit: 3
+logging_steps: 1
+output_dir: /data/checkpoints/olmo3-32b-axolotl-bf16
+
+wandb_project: olmo3-sft
+wandb_name: olmo3-32b-bf16
+
+seed: 42

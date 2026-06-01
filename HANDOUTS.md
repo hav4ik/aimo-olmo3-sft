@@ -52,6 +52,7 @@ secrets as **`-e`**. `entrypoint.sh` dispatches on env:
 |---|---|
 | `FRAMEWORK` | `olmocore` \| `axolotl` (unset ⇒ **shell** — your debug entry) |
 | `PRECISION` | `bf16` (default) \| `fp8` |
+| `MODEL_SIZE` | axolotl only: `7b` (default) \| `32b` → picks `configs/olmo3-<size>-<precision>.yaml` |
 | `STAGE` | olmocore only: `train` (default) \| `convert` (HF→distcp checkpoint, once) |
 | `DATASET_NAME` | which prepped dataset under `/data/training/datasets/<NAME>/` to train on |
 | `NPROC_PER_NODE` | GPUs/node (default = all visible) |
@@ -186,8 +187,10 @@ olmocore deploy image, or `data_prep/convert_hf_to_olmocore.sh` →
 3. **FP8 on Blackwell (RTX 6000)** untested (esp. FP8 + `flex_attention`) — first RTX 6000 run = BF16.
 4. **Exported `generation_config.eos_token_id`** should list **both** `[100265, 100257]` (OLMo-core's HF
    converter does this; for axolotl set at export/serving).
-5. **Axolotl 32B config** (`axolotl/configs/olmo3-32b-tulu-math.yaml`) not yet recipe-aligned (still
-   chatml/HF-dataset) — fine for the 7B first run; revisit for scale-up.
+5. **OLMo-core 32B not wired** — the trainer `Olmo-3-7B-SFT-local.py` is 7B-only (`olmo3_7B`
+   factory). Axolotl 32B IS aligned now (`olmo3-32b-{bf16,fp8}.yaml`, select with
+   `MODEL_SIZE=32b`), but for the *reference* 32B path you'd add an `Olmo-3-32B-SFT-local.py`
+   (beaker-stub AI2's 32B script, same as the 7B) + a `MODEL_SIZE`/arch switch in olmocore/run.sh.
 
 ---
 
