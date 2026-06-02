@@ -1,0 +1,30 @@
+# OLMo-core SFT TRAINING image = AI2's official image + the olmo_core source.
+#
+# AI2's official image (built from src/Dockerfile UNCHANGED, cu130) is deps-only by
+# design: it installs '.[all]' from this repo's pyproject, then uninstalls the
+# package so source can change without rebuilding deps. We bake our pinned olmo_core
+# source on top so the final image is SELF-CONTAINED for the egress-restricted H200
+# cluster (no runtime pip/clone). FA2 + FA3 + TransformerEngine + liger + torch
+# (cu130) all come from the official base unchanged.
+#
+# Build (after building the official base):
+#   docker build -f docker/Dockerfile.runtime \
+#     --build-arg BASE_IMAGE=olmo-core:cu130-2.10.0 \
+#     -t olmo-core-sft:cu130 .
+ARG BASE_IMAGE=olmo-core:cu130-2.10.0
+FROM ${BASE_IMAGE}
+
+COPY . /workspace/OLMo-core
+WORKDIR /workspace/OLMo-core
+# Source only — every dependency is already present in the official base (it
+# installed '.[all]' from this same pyproject before uninstalling the package).
+RUN pip install -e . --no-deps
+
+ENV HF_HOME=/data/hf_cache
+ENV NCCL_IB_DISABLE=0 \
+    NCCL_SOCKET_IFNAME=^docker0,lo,veth \
+    NCCL_BUFFSIZE=2097152 \
+    TORCH_NCCL_ASYNC_ERROR_HANDLING=1 \
+    TORCH_NCCL_BLOCKING_WAIT=1
+
+CMD ["/bin/bash"]

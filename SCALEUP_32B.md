@@ -24,7 +24,7 @@ Optimizer (SkipStepAdamW), hsdp, selective AC, compile, bf16 — same as the 7B.
   batch, seq 32768, `tokenizer_default` think template, parquet input). Run with `MODEL_SIZE=32b`.
 - **Data prep:** the SAME `data_prep/prepare.sh` — the dolma2 tokenizer is shared across Olmo 3
   sizes, so the same prepped `messages.parquet` / `.npy` work for 7B and 32B. Just reuse `DATASET_NAME`.
-- **Deploy image:** the same `hav4ik/olmo3-axolotl:cu130` (axolotl 32B works today via `MODEL_SIZE=32b`).
+- **Deploy image:** the same `chankhavu/olmo3-axolotl:cu130` (axolotl 32B works today via `MODEL_SIZE=32b`).
 
 ## TODO: wire the OLMo-core 32B reference path (the held work)
 Axolotl 32B runs now; the **reference** engine (OLMo-core) 32B is NOT wired yet — the trainer
@@ -54,12 +54,13 @@ Axolotl 32B runs now; the **reference** engine (OLMo-core) 32B is NOT wired yet 
 ```bash
 # 1. prep the real data (same as 7B; one parquet works for both sizes)
 ./data_prep/prepare.sh --name mymath --input <real-dataset> --template olmo_thinker --max-seq 32768
-# 2. convert the 32B checkpoint once (OLMo-core)
+# 2. (multi-node only) pre-stage the 32B distcp checkpoint once, so NODE_RANK=0 alone converts
+#    and the other nodes don't race. Single-node auto-converts on first train — skip this step.
 docker run --rm --gpus all -v /data/training:/data/training -e HF_TOKEN=$HF_TOKEN \
-  -e FRAMEWORK=olmocore -e MODEL_SIZE=32b -e STAGE=convert hav4ik/olmo3-olmocore:cu130
+  -e FRAMEWORK=olmocore -e MODEL_SIZE=32b -e STAGE=convert chankhavu/olmo3-olmocore:cu130
 # 3a. axolotl 32B (works today) — multi-node example
 docker run ... -e FRAMEWORK=axolotl -e MODEL_SIZE=32b -e PRECISION=bf16 -e DATASET_NAME=mymath \
-  -e NNODES=2 -e NODE_RANK=0 -e HEAD_NODE_IP=... hav4ik/olmo3-axolotl:cu130
+  -e NNODES=2 -e NODE_RANK=0 -e HEAD_NODE_IP=... chankhavu/olmo3-axolotl:cu130
 # 3b. OLMo-core 32B — after the wiring above
 docker run ... -e FRAMEWORK=olmocore -e MODEL_SIZE=32b -e PRECISION=bf16 -e DATASET_NAME=mymath ...
 ```

@@ -16,9 +16,12 @@ bootstrap.sh  entrypoint.sh   HANDOUTS.md  RECIPES.md  STABILITY.md  DATA.md  SC
 **New here? Read `HANDOUTS.md`** — the full deploy + data-prep guide for picking this up.
 
 ## How it fits together
-- **DockerHub images** (`hav4ik/olmo3-olmocore:cu130`, `hav4ik/olmo3-axolotl:cu130`) bake only
-  `bootstrap.sh` as ENTRYPOINT. At start it clones `CODE_REPO@CODE_BRANCH` → `/workspace/code`
-  and execs `entrypoint.sh`.
+- **DockerHub images** (`chankhavu/olmo3-olmocore:cu130`, `chankhavu/olmo3-axolotl:cu130`) bake only
+  stable infra: `bootstrap.sh` (ENTRYPOINT) + the nvrtc/TE linker fix. At start, bootstrap clones
+  the code into the mounted run storage `/data/training/code` and execs `entrypoint.sh`. The code
+  is the **single source of truth = the git ref**: pin a run with `CODE_REF=<branch|tag|commit>`
+  (default branch `olmo3-sft`); the resolved commit SHA is printed at startup. Multi-node: node-rank
+  0 stages the code on the shared storage and the other nodes use it (identical code on every rank).
 - **`entrypoint.sh`** dispatches on `FRAMEWORK` → `olmocore/run.sh` or `axolotl/run.sh`. No
   `FRAMEWORK` ⇒ shell.
 - **Attention auto-selects by GPU arch**: sm_90 (H100/H200) → `flash_3` / `flash_attention_3`;
@@ -50,15 +53,14 @@ frameworks read it):
 docker run --rm --gpus all -v /data/training:/data/training \
   -e HF_TOKEN=$HF_TOKEN -e WANDB_API_KEY=$WANDB_API_KEY \
   -e FRAMEWORK=axolotl -e DATASET_NAME=mymath -e PRECISION=bf16 -e SEQUENCE_LEN=2048 -e MAX_STEPS=10 \
-  hav4ik/olmo3-axolotl:cu130
+  chankhavu/olmo3-axolotl:cu130
 
-# OLMo-core: convert the checkpoint ONCE, then train:
-docker run --rm --gpus all -v /data/training:/data/training -e HF_TOKEN=$HF_TOKEN \
-  -e FRAMEWORK=olmocore -e STAGE=convert hav4ik/olmo3-olmocore:cu130
+# OLMo-core: just train — the HF→distcp convert runs automatically on first use
+# (one-time per /data/training volume, CPU-only; cached for every later run):
 docker run --rm --gpus all -v /data/training:/data/training \
   -e HF_TOKEN=$HF_TOKEN -e WANDB_API_KEY=$WANDB_API_KEY \
   -e FRAMEWORK=olmocore -e DATASET_NAME=mymath -e PRECISION=bf16 \
-  -e SEQ_LEN=2048 -e GLOBAL_BATCH_SIZE=4096 -e MAX_STEPS=10 hav4ik/olmo3-olmocore:cu130
+  -e SEQ_LEN=2048 -e GLOBAL_BATCH_SIZE=4096 -e MAX_STEPS=10 chankhavu/olmo3-olmocore:cu130
 ```
 Full recipe (8×H200): drop the smoke overrides (defaults seq 32768 / 1,048,576 tok / 2 epochs).
 FP8: `-e PRECISION=fp8`. **Full env contract + data-prep guide in `HANDOUTS.md`.**
@@ -69,7 +71,7 @@ FP8: `-e PRECISION=fp8`. **Full env contract + data-prep guide in `HANDOUTS.md`.
 | `FRAMEWORK` | `olmocore` \| `axolotl` (unset ⇒ shell) |
 | `PRECISION` | `bf16` (default) \| `fp8` |
 | `MODEL_SIZE` | axolotl only: `7b` (default) \| `32b` → `configs/olmo3-<size>-<precision>.yaml` |
-| `STAGE` | olmocore only: `train` (default) \| `convert` (HF→distcp checkpoint, run once) |
+| `STAGE` | olmocore only: `train` (default, auto-converts HF→distcp on first run) \| `convert` (just produce the distcp checkpoint & exit — optional explicit pre-stage) |
 | `DATASET_NAME` | which prepped dataset under `/data/training/datasets/<NAME>/` to train on |
 | `NPROC_PER_NODE` | GPUs/node (default = all visible) |
 | `NNODES`, `NODE_RANK`, `HEAD_NODE_IP`, `NCCL_PORT` | multi-node (e.g. 16×H200); single-node otherwise |
@@ -81,7 +83,7 @@ FP8: `-e PRECISION=fp8`. **Full env contract + data-prep guide in `HANDOUTS.md`.
 ## Data layout under `/data/training` (produced by `data_prep/prepare.sh --name <NAME>`)
 - `datasets/<NAME>/messages.parquet` — normalized, shared (Axolotl reads this)
 - `datasets/<NAME>/olmocore/` — tokenized `.npy` for OLMo-core
-- `checkpoints/olmocore-olmo3-7b-think/` — converted base checkpoint (`STAGE=convert` makes it)
+- `checkpoints/olmocore-olmo3-7b-think/` — converted base checkpoint (auto-made on first olmocore run; `.convert_complete` sentinel marks it done)
 - `hf_cache/`, `wandb/` — created automatically
 Both frameworks train the SAME prepped examples (selected by `DATASET_NAME`). See `HANDOUTS.md` §6.
 

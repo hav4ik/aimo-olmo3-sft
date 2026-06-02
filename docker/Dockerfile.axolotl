@@ -9,9 +9,11 @@ USER root
 COPY bootstrap.sh /usr/local/bin/bootstrap.sh
 RUN chmod +x /usr/local/bin/bootstrap.sh && (command -v git >/dev/null || (apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*))
 
+# Code is cloned into the mounted run storage at runtime (single source = the git ref); pin with
+# CODE_REF=<branch|tag|commit>. CODE_DIR must live on a writable mount (the bound /data/training).
 ENV CODE_REPO=https://github.com/hav4ik/aimo-olmo3-sft \
     CODE_BRANCH=olmo3-sft \
-    CODE_DIR=/workspace/code \
+    CODE_DIR=/data/training/code \
     HF_HOME=/data/training/hf_cache
 WORKDIR /workspace
 # Override the base image's uv-entrypoint; axolotl/run.sh sources the venv itself.

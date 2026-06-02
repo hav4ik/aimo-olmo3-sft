@@ -1,0 +1,41 @@
+# open-instruct DATA-PREP image (Olmo 3 SFT tokenization only).
+#
+# Olmo 3 was post-trained with AI2's open-instruct + OLMo-core, so to stay true to
+# their stack we tokenize SFT data with open-instruct's canonical converter
+# (scripts/data/convert_sft_data_for_olmocore.py) and its registered `olmo` chat
+# template — rather than hand-rolling formatting/masking.
+#
+# This image is for DATA PREP ONLY. open-instruct's full dependency set pulls
+# vllm + flash-attn(2/3/4) + deepspeed (training/inference) — none of which the
+# data-conversion path imports. So we install the package with --no-deps and add
+# only the modules that path actually needs (dataset_transformation,
+# numpy_dataset_conversion, utils → torch/transformers/datasets/ray/beaker/wandb/…).
+FROM python:3.12-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git build-essential curl && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+COPY . /workspace/open-instruct
+WORKDIR /workspace/open-instruct
+
+# CPU torch — tokenization needs no GPU, and this keeps the image small.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+# open_instruct package itself, without its heavy (train/inference) deps.
+# Pin the version so setuptools_scm doesn't need the .git dir (excluded from context).
+ENV SETUPTOOLS_SCM_PRETEND_VERSION=0.1.0
+RUN pip install --no-cache-dir --no-deps -e .
+
+# ...plus exactly the runtime deps the data-conversion import chain needs.
+RUN pip install --no-cache-dir \
+        "transformers>=5.4.0" "datasets>=4.0.0" "numpy>=2" \
+        huggingface_hub hf-transfer rich tqdm pyyaml pyarrow \
+        beaker-py ray wandb python-dateutil requests immutabledict \
+        ai2-olmo-core
+
+ENV HF_HOME=/data/hf_cache
+ENV HF_HUB_ENABLE_HF_TRANSFER=1
+CMD ["/bin/bash"]

@@ -12,7 +12,7 @@ throwaway *smoke* dataset — see §6). Read this once top-to-bottom.
 - Two precision arms each: **BF16** (default) and **FP8** (opt-in; §5).
 - A deployable **mono-repo** (this repo, branch `olmo3-sft`) + two **DockerHub images** are built.
   Confirm what's pushed before relying on it: `git log origin/olmo3-sft -1` and
-  `docker manifest inspect hav4ik/olmo3-olmocore:cu130`. Vast.AI runs fail at the runtime
+  `docker manifest inspect chankhavu/olmo3-olmocore:cu130`. Vast.AI runs fail at the runtime
   `git clone` / image pull until the push happens.
 - All runs so far use the SMOKE dataset `allenai/tulu-3-sft-personas-math`. The real `<think>` math
   dataset is **your job** (§6) — there's now ONE offline prep that feeds both frameworks.
@@ -31,8 +31,8 @@ throwaway *smoke* dataset — see §6). Read this once top-to-bottom.
 **Docker images** (`docker images`):
 | Image | Role |
 |---|---|
-| `hav4ik/olmo3-olmocore:cu130` (12 GB) | **deploy** — base + bootstrap (clones this repo at runtime) |
-| `hav4ik/olmo3-axolotl:cu130` (19 GB) | **deploy** |
+| `chankhavu/olmo3-olmocore:cu130` (12 GB) | **deploy** — base + bootstrap (clones this repo at runtime) |
+| `chankhavu/olmo3-axolotl:cu130` (19 GB) | **deploy** |
 | `olmo-core-sft:cu130` | base: AI2 deps + olmo_core + FA2(sm90;100;120)+FA3+FA4 (built from the OLMo-core fork) |
 | `axolotl-olmo3-sft:0.1.0` | base: axolotl-uv cu130 + FA3 wheel |
 | `open-instruct-dataprep:0.1.0` (2.3 GB) | **data prep** — tokenizes SFT data → OLMo-core `.npy` |
@@ -53,7 +53,7 @@ secrets as **`-e`**. `entrypoint.sh` dispatches on env:
 | `FRAMEWORK` | `olmocore` \| `axolotl` (unset ⇒ **shell** — your debug entry) |
 | `PRECISION` | `bf16` (default) \| `fp8` |
 | `MODEL_SIZE` | axolotl only: `7b` (default) \| `32b` → picks `configs/olmo3-<size>-<precision>.yaml` |
-| `STAGE` | olmocore only: `train` (default) \| `convert` (HF→distcp checkpoint, once) |
+| `STAGE` | olmocore only: `train` (default, auto-converts HF→distcp on first run) \| `convert` (just produce the checkpoint & exit) |
 | `DATASET_NAME` | which prepped dataset under `/data/training/datasets/<NAME>/` to train on |
 | `NPROC_PER_NODE` | GPUs/node (default = all visible) |
 | `NNODES`, `NODE_RANK`, `HEAD_NODE_IP`, `NCCL_PORT` | multi-node (e.g. 16×H200); single-node otherwise |
@@ -69,15 +69,15 @@ secrets as **`-e`**. `entrypoint.sh` dispatches on env:
 docker run --rm --gpus all -v /data/training:/data/training \
   -e HF_TOKEN=$HF_TOKEN -e WANDB_API_KEY=$WANDB_API_KEY \
   -e FRAMEWORK=axolotl -e DATASET_NAME=mymath -e PRECISION=bf16 -e SEQUENCE_LEN=2048 -e MAX_STEPS=10 \
-  hav4ik/olmo3-axolotl:cu130
+  chankhavu/olmo3-axolotl:cu130
 
-# OLMo-core: convert checkpoint ONCE, then train:
-docker run --rm --gpus all -v /data/training:/data/training -e HF_TOKEN=$HF_TOKEN \
-  -e FRAMEWORK=olmocore -e STAGE=convert hav4ik/olmo3-olmocore:cu130
+# OLMo-core: just train — HF→distcp convert runs automatically on first use
+# (one-time per /data/training volume, CPU; cached after). Add -e STAGE=convert to
+# pre-stage the checkpoint without training (e.g. once before a multi-node job).
 docker run --rm --gpus all -v /data/training:/data/training \
   -e HF_TOKEN=$HF_TOKEN -e WANDB_API_KEY=$WANDB_API_KEY \
   -e FRAMEWORK=olmocore -e DATASET_NAME=mymath -e PRECISION=bf16 \
-  -e SEQ_LEN=2048 -e GLOBAL_BATCH_SIZE=4096 -e MAX_STEPS=10 hav4ik/olmo3-olmocore:cu130
+  -e SEQ_LEN=2048 -e GLOBAL_BATCH_SIZE=4096 -e MAX_STEPS=10 chankhavu/olmo3-olmocore:cu130
 ```
 Full recipe (8×H200): drop the smoke overrides (defaults = seq 32768 / 1,048,576 tok / 2 epochs).
 
@@ -164,10 +164,12 @@ if the source has no `messages` column.
 ```
 Then train with **`-e DATASET_NAME=mymath`** (both frameworks read the right artifacts automatically).
 
-### Checkpoint conversion (OLMo-core only, once)
-HF → OLMo-core distcp (mandatory — OLMo-core can't load HF directly): `STAGE=convert` on the
-olmocore deploy image, or `data_prep/convert_hf_to_olmocore.sh` →
-`/data/training/checkpoints/olmocore-olmo3-7b-think`. Reuse across runs.
+### Checkpoint conversion (OLMo-core only — automatic)
+OLMo-core can't load HF weights directly, so the HF→distcp convert is required — but it now runs
+**automatically on the first olmocore run** (one-time per `/data/training` volume, CPU; a
+`.convert_complete` sentinel marks it done and every later run reuses it). Output lands in
+`/data/training/checkpoints/olmocore-olmo3-7b-think`. To pre-stage it without training (e.g. once
+before a multi-node job, so only NODE_RANK=0 converts), run the image with `-e STAGE=convert`.
 
 ### Notes
 - `normalize.py` validated end-to-end (HF → parquet). open-instruct's loader natively accepts the
@@ -181,7 +183,7 @@ olmocore deploy image, or `data_prep/convert_hf_to_olmocore.sh` →
 ## 7. Open issues / TODOs
 1. **Push** the repo (`git push`) + the two deploy images (`docker push`) — until then Vast.AI fails at
    clone/pull. The dataprep image (`open-instruct-dataprep:0.1.0`) isn't on DockerHub either — run prep
-   on the dev box, or push it as `hav4ik/olmo3-dataprep`.
+   on the dev box, or push it as `chankhavu/olmo3-dataprep`.
 2. **Pick the OLMo-core `--template`** for the real data: `olmo_thinker` if it carries `<think>` traces,
    else `olmo_thinker_no_think_sft_tokenization`.
 3. **FP8 on Blackwell (RTX 6000)** untested (esp. FP8 + `flex_attention`) — first RTX 6000 run = BF16.

@@ -21,7 +21,7 @@ for FW in olmocore axolotl; do for P in bf16 fp8; do
   docker run --rm --gpus all -v /data/training:/data/training \
     -e HF_TOKEN=$HF_TOKEN -e WANDB_API_KEY=$WANDB_API_KEY \
     -e FRAMEWORK=$FW -e PRECISION=$P -e DATASET_NAME=<NAME> -e MAX_STEPS=300 \
-    hav4ik/olmo3-$FW:cu130
+    chankhavu/olmo3-$FW:cu130
 done; done
 ```
 ~300 steps is enough to see divergence. (OLMo-core needs `STAGE=convert` once first.)

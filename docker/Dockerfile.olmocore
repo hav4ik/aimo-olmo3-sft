@@ -1,16 +1,28 @@
-# Vast.AI / cluster deploy image for OLMo-core SFT.
+# Vast.AI / ABCI(NII) deploy image for OLMo-core SFT.
 # Thin layer on our prebuilt base (AI2's deps + olmo_core source + FA2 sm90;100;120 + FA3 + FA4).
-# Bakes ONLY the bootstrap (which clones the code repo at runtime). No code, no secrets, no data.
-# Build context = repo root:  docker build -f docker/Dockerfile.olmocore -t hav4ik/olmo3-olmocore:cu130 .
+# Bakes ONLY stable infra: the bootstrap launcher + the nvrtc/TE linker fix. The CODE is cloned at
+# runtime (single source of truth = the git ref); the tokenized DATA is downloaded from HF at runtime
+# (tokenized OFFLINE, hosted as a dataset repo). No code, no secrets, no data, no tokenizer stack.
+# Build context = repo root:
+#   docker build -f docker/Dockerfile.olmocore -t hav4ik/olmo3-olmocore:cu130 .
 ARG BASE=olmo-core-sft:cu130
 FROM ${BASE}
+
+# Bake the nvrtc/TE fix into the linker cache at BUILD time so `import transformer_engine` works
+# even on a READ-ONLY rootfs (Singularity squashfs), where run.sh's runtime ld fix can't write.
+# cu13 wheels ship libnvrtc under .../nvidia/cu13/lib, off the default linker path; TE greps
+# `ldconfig -p` at import and dies if it's missing. Populate + verify the cache here.
+RUN set -e; d="$(dirname "$(find /opt/conda -name 'libnvrtc.so*' | head -1)")"; \
+    echo "$d" > /etc/ld.so.conf.d/zz-nvrtc.conf && ldconfig && ldconfig -p | grep -q 'libnvrtc\.so'
 
 COPY bootstrap.sh /usr/local/bin/bootstrap.sh
 RUN chmod +x /usr/local/bin/bootstrap.sh && (command -v git >/dev/null || (apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*))
 
+# Code is cloned into the mounted run storage at runtime (single source = the git ref); pin a run
+# with CODE_REF=<branch|tag|commit>. CODE_DIR must live on a writable mount (the bound /data/training).
 ENV CODE_REPO=https://github.com/hav4ik/aimo-olmo3-sft \
     CODE_BRANCH=olmo3-sft \
-    CODE_DIR=/workspace/code \
+    CODE_DIR=/data/training/code \
     HF_HOME=/data/training/hf_cache
 WORKDIR /workspace
 ENTRYPOINT ["/usr/local/bin/bootstrap.sh"]

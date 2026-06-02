@@ -81,7 +81,7 @@ from olmo_core.io import copy_dir, dir_is_empty, get_parent, join_path, list_dir
 from olmo_core.nn.attention import AttentionBackendName  # DIFF #4 (env attn backend)
 from olmo_core.nn.rope import YaRNRoPEScalingConfig
 from olmo_core.nn.transformer import TransformerConfig
-from olmo_core.optim import LinearWithWarmup, SkipStepAdamWConfig
+from olmo_core.optim import AdamWConfig, LinearWithWarmup, SkipStepAdamWConfig
 from olmo_core.train import (
     Duration,
     LoadStrategy,
@@ -408,6 +408,25 @@ class SFTConfig(Config):
                 modules_to_ignore=fp8_attention_ignores(model),
             )
 
+        # DIFF #3 (cont.): optimizer by env. AI2's recipe uses SkipStepAdamW (skips a step when
+        # the loss/grad-norm spikes past a rolling sigma band) for BOTH precisions. We keep that
+        # for FP8 — the spike-prone path — so instability is caught instead of diverging, AND the
+        # trainer auto-logs `optim/step skipped` (0/1 per step => averages to the skip frequency)
+        # for any SkipStepOptimizer. For the stable BF16 baseline we opt into torch's FUSED AdamW
+        # (single fused CUDA kernel) for speed. NB SkipStepAdamW == AdamW whenever it isn't
+        # skipping, so the BF16-vs-FP8 update rule only diverges exactly when FP8 spikes (which the
+        # skip metric flags). OLMO_OPTIM default = skip_step, so a no-env run stays AI2-bit-for-bit;
+        # olmocore/run.sh wires bf16 -> fused_adamw and fp8 -> skip_step.  weight_decay=0.0 here is
+        # the SFT recipe (different from pretraining).
+        if os.environ.get("OLMO_OPTIM", "skip_step") == "fused_adamw":
+            optim_config = AdamWConfig(
+                lr=8e-05, weight_decay=0.0, betas=(0.9, 0.95), fused=True
+            )
+        else:
+            optim_config = SkipStepAdamWConfig(
+                lr=8e-05, weight_decay=0.0, betas=(0.9, 0.95), compile=False
+            )
+
         config = SFTConfig(
             run_name=run_name,
             launch=build_launch_config(
@@ -443,12 +462,7 @@ class SFTConfig(Config):
                 z_loss_multiplier=None,
                 compile_model=True,
                 float8_config=float8_config,  # DIFF #3: None unless OLMO_FP8 set (=> AI2 bf16)
-                optim=SkipStepAdamWConfig(
-                    lr=8e-05,
-                    weight_decay=0.0,  # NOTE: different from pretraining
-                    betas=(0.9, 0.95),
-                    compile=False,
-                ),
+                optim=optim_config,  # fused AdamW (bf16) | SkipStepAdamW (fp8) — see OLMO_OPTIM above
                 dp_config=dp_config,
                 cp_config=cp_config,
                 ac_config=ac_config,
@@ -482,9 +496,14 @@ class SFTConfig(Config):
                 "wandb",
                 WandBCallback(
                     name=run_name,
-                    entity="ai2-llm",
-                    project=f"{user_name}-7B-sft",
-                    enabled=False,
+                    # entity=None => the user's own default W&B entity (NOT ai2-llm, which only
+                    # AI2 members can write to). Override with WANDB_ENTITY / WANDB_PROJECT.
+                    entity=os.environ.get("WANDB_ENTITY") or None,
+                    project=os.environ.get("WANDB_PROJECT", "olmo3-7b-sft"),
+                    # On when a key is provided (entrypoint.sh forces WANDB_MODE=offline otherwise).
+                    # Enabling this is what surfaces `optim/step skipped` (the FP8 skip frequency)
+                    # and the loss curves; upstream shipped it disabled for the Beaker path.
+                    enabled=bool(os.environ.get("WANDB_API_KEY")),
                     cancel_check_interval=10,
                 ),
             ),

@@ -1,18 +1,40 @@
 #!/bin/bash
-# Baked into the DockerHub image as ENTRYPOINT. Pulls the latest code from GitHub at
-# container start, then hands off to the repo's entrypoint. This is the ONLY thing baked
-# from us into the image — so iterating on configs/scripts is just `git push` (no rebuild).
-# No secrets here: HF_TOKEN / WANDB_API_KEY come from the container env (-e), data from
-# /data/training (mounted). Override the source via CODE_REPO / CODE_BRANCH / CODE_DIR.
+# ENTRYPOINT. Clones THIS repo's code at container start, so the code iterates independently of the
+# heavy-deps image (we change configs/recipes far more often than the image). SINGLE source of
+# truth = the git ref you ask for. Pin a run with CODE_REF=<branch|tag|commit> (default: the
+# olmo3-sft branch); the resolved commit SHA is printed at startup so any run is traceable/debuggable.
+#
+# Clones into the MOUNTED run storage (CODE_DIR, default /data/training/code) — writable even under a
+# read-only Singularity rootfs, and the exact code that ran sits next to the checkpoints. Multi-node:
+# node-rank 0 stages the code on the shared storage and the other nodes use it (no clone race,
+# identical code on every rank). No secrets here; HF_TOKEN/WANDB_API_KEY come from the container env.
 set -euo pipefail
 REPO="${CODE_REPO:-https://github.com/hav4ik/aimo-olmo3-sft}"
-BRANCH="${CODE_BRANCH:-olmo3-sft}"
-DEST="${CODE_DIR:-/workspace/code}"
+REF="${CODE_REF:-${CODE_BRANCH:-olmo3-sft}}"
+DEST="${CODE_DIR:-/data/training/code}"
+READY="$DEST/.code_ready"
+RANK="${NODE_RANK:-${GLOBAL_RANK:-0}}"
 
-echo "[bootstrap] pulling ${REPO}@${BRANCH} -> ${DEST}"
-if [ -d "$DEST/.git" ]; then
-    git -C "$DEST" fetch --depth 1 origin "$BRANCH" && git -C "$DEST" reset --hard "origin/$BRANCH"
+if [ "$RANK" -eq 0 ]; then
+    rm -f "$READY"; mkdir -p "$DEST"
+    if [ -d "$DEST/.git" ]; then
+        echo "[bootstrap] updating $DEST from $REPO"
+        git -C "$DEST" remote set-url origin "$REPO"
+        git -C "$DEST" fetch --all --tags --prune
+    else
+        echo "[bootstrap] cloning $REPO -> $DEST"
+        git clone "$REPO" "$DEST"
+    fi
+    git -C "$DEST" checkout -f "$REF"
+    git -C "$DEST" reset --hard "origin/$REF" 2>/dev/null || true   # fast-forward if REF is a branch
+    SHA="$(git -C "$DEST" rev-parse --short HEAD)"
+    echo "[bootstrap] code: ${REF} @ ${SHA} — $(git -C "$DEST" log -1 --pretty=%s)"
+    echo "$SHA" > "$READY"
 else
-    git clone --depth 1 -b "$BRANCH" "$REPO" "$DEST"
+    echo "[bootstrap] node_rank=$RANK waiting for rank-0 to stage code at $DEST ..."
+    sleep 5   # let rank-0 clear any stale sentinel from a previous run first
+    for _ in $(seq 1 180); do [ -f "$READY" ] && break; sleep 5; done
+    [ -f "$READY" ] || { echo "[bootstrap] ERROR: timed out waiting for code at $READY"; exit 5; }
+    echo "[bootstrap] using rank-0 staged code @ $(cat "$READY")"
 fi
 exec bash "$DEST/entrypoint.sh" "$@"

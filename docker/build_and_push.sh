@@ -8,7 +8,7 @@
 # These are large; build them once on a machine with a GPU/CUDA toolchain, or pull if you've
 # already pushed them. The deploy layer here only adds the ~1KB bootstrap, so build is instant.
 set -euo pipefail
-DOCKERHUB_USER="${DOCKERHUB_USER:-hav4ik}"
+DOCKERHUB_USER="${DOCKERHUB_USER:-chankhavu}"
 TAG="${TAG:-cu130}"
 cd "$(dirname "$0")/.."   # repo root = build context (so COPY bootstrap.sh resolves)
 
