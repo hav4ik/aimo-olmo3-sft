@@ -23,6 +23,12 @@ DATASET_SRC="${DATASET_SRC:-${DATASET_HF:-}}"
 CC="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1)"
 case "$CC" in 9.*) DEFATTN=flash_attention_3 ;; *) DEFATTN=flex_attention ;; esac
 ATTN="${ATTN_IMPL:-$DEFATTN}"
+# Sequence parallelism for long context (e.g. 65536): CONTEXT_PARALLEL_SIZE>1 (a divisor of the total
+# GPUs) splits each sequence across that many ranks so the activations fit. SP needs flash attention
+# (its ring kernel is FA2-based; FA3 is Hopper-only), so force flash_attention_2 when on. ring-flash-attn
+# also requires micro_batch_size=1 + sample_packing, which the configs already set.
+CP_SIZE="${CONTEXT_PARALLEL_SIZE:-1}"
+[ "$CP_SIZE" -gt 1 ] && ATTN=flash_attention_2
 
 # materialize the config with the dataset source substituted in
 CFG=/tmp/axolotl-config.yaml
@@ -35,6 +41,7 @@ OVERRIDES=(
 )
 [ -n "${SEQUENCE_LEN:-}" ] && OVERRIDES+=("--sequence_len=$SEQUENCE_LEN")
 [ -n "${MAX_STEPS:-}"    ] && OVERRIDES+=("--max_steps=$MAX_STEPS")
+[ "$CP_SIZE" -gt 1 ]       && OVERRIDES+=("--context_parallel_size=$CP_SIZE")
 # FP8 on Blackwell sm_120: flex_attention + torchao-fp8 compile path is untested — for the
 # first RTX 6000 run use BF16; FP8 is the proven path on Hopper.
 
