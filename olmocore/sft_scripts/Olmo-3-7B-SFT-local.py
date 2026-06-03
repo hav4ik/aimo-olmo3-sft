@@ -5,7 +5,8 @@ near-verbatim so we run AI2's ACTUAL recipe, not a reimplementation. The body
 Beaker/cluster coupling is stubbed so `train` runs under a plain `torchrun`
 off-cluster. Re-diff against upstream when bumping the OLMo-core pin.
 
-DIFFERENCES FROM UPSTREAM (minimal; a NO-ENV run == AI2's recipe bit-for-bit):
+DIFFERENCES FROM UPSTREAM (minimal; a NO-ENV run == the plain Olmo-3-7B-SFT.py reference
+bit-for-bit EXCEPT the fused-linear CE default — DIFF #5; set OLMO_FUSED_LCE=0 for exact parity):
   1. Beaker decoupling — `olmo_core.internal.common` (CLUSTER_TO_GPU_TYPE,
      build_launch_config, get_beaker_username, get_root_dir, get_work_dir) and
      `olmo_core.launch.beaker.BeakerLaunchConfig` are replaced by local stubs
@@ -20,6 +21,11 @@ DIFFERENCES FROM UPSTREAM (minimal; a NO-ENV run == AI2's recipe bit-for-bit):
        - OLMO_ATTN_BACKEND=flash_3  -> FA3 packed-varlen (vs AI2 flash_2)
        - OLMO_FP8=rowwise|tensorwise|rowwise_with_gw_hp -> torchao float8 on the linears
        - OLMO_MODEL_DTYPE           -> override model storage dtype (else factory)
+
+  5. OLMO_FUSED_LCE (default ON): Liger fused-linear cross-entropy instead of materializing
+     the full (T, vocab) logits + fp32 upcast. Matches AI2's OWN long-context / hybrid SFT
+     scripts (which set loss_implementation=fused_linear); only the plain Olmo-3-7B-SFT.py
+     (seq 32768) left it off. ~10 GB saved at seq 65536, no recompute. OLMO_FUSED_LCE=0 = reference.
 
 NOTHING ELSE DEVIATES — optimizer (SkipStepAdamW), hsdp, selective AC (feed_forward),
 compile_model=True, generate_doc_lengths=True, YaRN are all EXACTLY upstream.
@@ -398,6 +404,17 @@ class SFTConfig(Config):
         ).with_rope_scaling(
             YaRNRoPEScalingConfig(factor=8, beta_fast=32, beta_slow=1, old_context_len=8192)
         )
+        # DIFF #5: fused-linear cross-entropy (Liger). The default LM head materializes the full
+        # (T, vocab) logits AND upcasts to fp32 for the CE — ~10 GB transient at seq 65536 / vocab
+        # 100352, for no quality gain. AI2's OWN long-context + hybrid SFT scripts switch to the Liger
+        # fused-linear-CE (never materializes logits; numerically ~equivalent, NO recompute cost);
+        # only the plain Olmo-3-7B-SFT.py reference (tuned for seq 32768 on 80-141 GB H100/H200) leaves
+        # it on the default. We run 65536, so we DEFAULT to the fused kernel like AI2's long-context
+        # recipe. Set OLMO_FUSED_LCE=0 to restore the exact Olmo-3-7B-SFT.py reference (materialized
+        # logits). liger-kernel is in the image; required for this path.
+        if os.environ.get("OLMO_FUSED_LCE", "1") != "0":
+            from olmo_core.nn.lm_head import LMLossImplementation
+            model.lm_head.loss_implementation = LMLossImplementation.fused_linear
         float8_config = None
         if os.environ.get("OLMO_FP8"):
             # FP8 on the feed-forward linears, but keep ALL attention projections in high
