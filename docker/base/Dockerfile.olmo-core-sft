@@ -1,23 +1,33 @@
-# OLMo-core SFT TRAINING image = AI2's official image + the olmo_core source.
+# OLMo-core SFT TRAINING image = AI2's official deps base + the olmo_core source, CLONED FROM THE FORK.
 #
-# AI2's official image (built from src/Dockerfile UNCHANGED, cu130) is deps-only by
-# design: it installs '.[all]' from this repo's pyproject, then uninstalls the
-# package so source can change without rebuilding deps. We bake our pinned olmo_core
-# source on top so the final image is SELF-CONTAINED for the egress-restricted H200
-# cluster (no runtime pip/clone). FA2 + FA3 + TransformerEngine + liger + torch
-# (cu130) all come from the official base unchanged.
+# AI2's official image (built from src/Dockerfile UNCHANGED, cu130) is deps-only by design: it installs
+# '.[all]' from the pyproject, then uninstalls the package so source can change without rebuilding deps.
+# We clone our pinned olmo_core source on top so the final image is SELF-CONTAINED for the egress-
+# restricted H200 cluster (no runtime pip/clone). FA2 + FA3 + TransformerEngine + liger + torch (cu130)
+# all come from the official base unchanged.
 #
-# Build (after building the official base):
-#   docker build -f docker/Dockerfile.runtime \
-#     --build-arg BASE_IMAGE=olmo-core:cu130-2.10.0 \
-#     -t olmo-core-sft:cu130 .
+# Source = the hav4ik/OLMo-core FORK, pulled FROM GITHUB at build time (reproducible without a local
+# checkout). `main` is reserved for upstream sync; `olmo3-sft` carries our divergence (FA2 sm120 build
+# + the fused-CE z-loss fix). Pin a build with OLMO_CORE_REF=<branch|tag>; override OLMO_CORE_REPO to
+# build from a different fork (then pass --no-cache, since the cache-bust ADD below targets the default).
+#
+# Build (after building the official base; context is unused — nothing is COPYied):
+#   docker build -f docker/base/Dockerfile.olmo-core-sft \
+#     --build-arg BASE_IMAGE=olmo-core:cu130-2.10.0 -t olmo-core-sft:cu130 docker/base/
 ARG BASE_IMAGE=olmo-core:cu130-2.10.0
 FROM ${BASE_IMAGE}
 
-COPY . /workspace/OLMo-core
+ARG OLMO_CORE_REPO=https://github.com/hav4ik/OLMo-core.git
+ARG OLMO_CORE_REF=olmo3-sft
+RUN command -v git >/dev/null 2>&1 || (apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*)
+# Bust the docker layer cache when the branch HEAD moves, so a rebuild actually re-clones new fork
+# commits (otherwise the `git clone` RUN below is cached forever). Targets the default fork; override
+# OLMO_CORE_REPO => use --no-cache.
+ADD https://api.github.com/repos/hav4ik/OLMo-core/commits/${OLMO_CORE_REF} /tmp/olmo_core_head.json
+RUN git clone --depth 1 --branch "${OLMO_CORE_REF}" "${OLMO_CORE_REPO}" /workspace/OLMo-core
 WORKDIR /workspace/OLMo-core
-# Source only — every dependency is already present in the official base (it
-# installed '.[all]' from this same pyproject before uninstalling the package).
+# Source only — every dependency is already present in the official base (it installed '.[all]' from
+# this same pyproject before uninstalling the package).
 RUN pip install -e . --no-deps
 
 ENV HF_HOME=/data/hf_cache
