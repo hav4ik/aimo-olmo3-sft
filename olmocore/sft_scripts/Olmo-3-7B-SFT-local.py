@@ -30,6 +30,13 @@ bit-for-bit EXCEPT the fused-linear CE default — DIFF #5; set OLMO_FUSED_LCE=0
      bound, PCIe-friendly) vs the reference's llama3 ring (P2P, latency-bound). Matches AI2's
      long-context SFT (OLMo-hybrid-7B-sft-think); needs n_heads % cp == 0. OLMO_CP_STYLE=ring +
      OLMO_RING_HEAD_STRIDE restore/tune the ring path.
+  7. OLMO_AC_BUDGET (opt-in): activation checkpointing mode. Unset = reference selected_modules
+     (recompute every FFN). <0..1> = budget mode (compiler picks the optimal recompute set for that
+     memory fraction; high ~0.8 recomputes less = faster when not memory-bound). 'none' = no AC.
+     Matches AI2's long-context scripts (budget 0.1-0.7).
+  8. OLMO_FP8_FSDP_ALLGATHER (opt-in, tensorwise only): all-gather params in fp8 -> halves HSDP
+     all-gather bytes (comm win on PCIe). Built via AOFloat8LinearConfig.recommended() like AI2's
+     official long-context script. Ignored (with a warning) on rowwise.
 
 NOTHING ELSE DEVIATES — optimizer (SkipStepAdamW), hsdp, selective AC (feed_forward),
 compile_model=True, generate_doc_lengths=True, YaRN are all EXACTLY upstream.
@@ -54,7 +61,7 @@ from urllib.parse import urlparse
 from rich import print
 
 from olmo_core.config import Config, DType
-from olmo_core.float8 import AOFloat8LinearRecipe, Float8Config  # DIFF #3: opt-in FP8
+from olmo_core.float8 import AOFloat8LinearConfig, AOFloat8LinearRecipe, Float8Config  # DIFF #3: opt-in FP8
 from olmo_core.data import (
     NumpyDataLoaderConfig,
     NumpyPackedFSLDatasetConfig,
@@ -361,10 +368,26 @@ class SFTConfig(Config):
         if not dp_shard_degree > 0:
             raise OLMoConfigurationError(f"dp_shard_degree ({dp_shard_degree}) must be positive.")
 
-        ac_config = TransformerActivationCheckpointingConfig(
-            mode=TransformerActivationCheckpointingMode.selected_modules,
-            modules=["blocks.*.feed_forward"],
-        )
+        # DIFF #7: activation checkpointing. Reference = selected_modules (recompute every FFN, a
+        # blunt rule). OLMO_AC_BUDGET=<0..1> switches to BUDGET mode: torch.compile's partitioner
+        # solves the optimal save-vs-recompute split for that memory fraction (1=save all/recompute
+        # nothing, 0=recompute all). AI2's long-context scripts use budget (7B=0.7, 32B=0.3, hybrid
+        # SFT=0.1); the 96 GB/141 GB boxes are not memory-bound, so a HIGH budget (~0.8) recomputes
+        # LESS = faster. OLMO_AC_BUDGET=none disables AC entirely (AI2's 7B long-context does this).
+        # Budget mode relies on compile_model=True (we have it).
+        _ac_budget = os.environ.get("OLMO_AC_BUDGET")
+        if _ac_budget is None:
+            ac_config = TransformerActivationCheckpointingConfig(
+                mode=TransformerActivationCheckpointingMode.selected_modules,
+                modules=["blocks.*.feed_forward"],
+            )
+        elif _ac_budget.lower() in ("none", "off"):
+            ac_config = None
+        else:
+            ac_config = TransformerActivationCheckpointingConfig(
+                mode=TransformerActivationCheckpointingMode.budget,
+                activation_memory_budget=float(_ac_budget),
+            )
 
         # DIFF #6: context-parallel comm style. Our data uses intra-document masking
         # (generate_doc_lengths), so what varies is the cp comm algorithm:
@@ -440,10 +463,26 @@ class SFTConfig(Config):
             # FP8 on the feed-forward linears, but keep ALL attention projections in high
             # precision (DeepSeek-V3 recipe; see fp8_attention_ignores). lm_head + embeddings
             # are already safe (auto-excluded / not nn.Linear).
-            float8_config = Float8Config(
-                ao_recipe=AOFloat8LinearRecipe[os.environ["OLMO_FP8"]],
-                modules_to_ignore=fp8_attention_ignores(model),
-            )
+            _fp8 = os.environ["OLMO_FP8"]
+            _ignores = fp8_attention_ignores(model)
+            # DIFF #8: OLMO_FP8_FSDP_ALLGATHER=1 all-gathers params in fp8 (halves HSDP all-gather
+            # bytes — a direct comm win on the PCIe box). Only works with TENSORWISE scaling, and the
+            # ao_recipe enum path forces it OFF, so we must build via AOFloat8LinearConfig.recommended()
+            # (tensorwise + enable_fsdp_float8_all_gather=True) — exactly AI2's official long-context
+            # config. modules_to_ignore is independent of ao vs ao_recipe, so attention stays high-precision.
+            if os.environ.get("OLMO_FP8_FSDP_ALLGATHER") and _fp8 == "tensorwise":
+                float8_config = Float8Config(
+                    ao=AOFloat8LinearConfig.recommended(), modules_to_ignore=_ignores
+                )
+            else:
+                if os.environ.get("OLMO_FP8_FSDP_ALLGATHER"):
+                    log.warning(
+                        "OLMO_FP8_FSDP_ALLGATHER ignored: fp8 all-gather needs tensorwise scaling "
+                        f"(OLMO_FP8={_fp8})"
+                    )
+                float8_config = Float8Config(
+                    ao_recipe=AOFloat8LinearRecipe[_fp8], modules_to_ignore=_ignores
+                )
 
         # DIFF #3 (cont.): optimizer by env. AI2's recipe uses SkipStepAdamW (skips a step when
         # the loss/grad-norm spikes past a rolling sigma band) for BOTH precisions. We keep that
