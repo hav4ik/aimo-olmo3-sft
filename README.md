@@ -9,9 +9,9 @@ precision arms each (**BF16** / **FP8**). The heavy deps live in prebuilt Docker
 ```
 olmocore/   sft_scripts/ (AI2's trainer, beaker-stubbed) · run.sh
 axolotl/    configs/ (olmo3-7b-bf16|fp8.yaml) · run.sh
-data_prep/  prepare.sh (offline prep, BOTH frameworks) · normalize.py · convert_hf_to_olmocore.sh
+data_prep/  prepare.sh (offline prep, BOTH frameworks) · normalize.py · convert_hf_to_olmocore.sh · arrow_to_pretokenized_parquet.py
 docker/     Dockerfile.olmocore · Dockerfile.axolotl · build_and_push.sh
-bootstrap.sh  entrypoint.sh   HANDOUTS.md  RECIPES.md  STABILITY.md  DATA.md  SCALEUP_32B.md
+bootstrap.sh  entrypoint.sh   HANDOUTS.md  RECIPES.md  BATCHING.md  STABILITY.md  DATA.md  SCALEUP_32B.md  AXOLOTL_PRETOKENIZED.md
 ```
 **New here? Read `HANDOUTS.md`** — the full deploy + data-prep guide for picking this up.
 
@@ -77,6 +77,7 @@ FP8: `-e PRECISION=fp8`. **Full env contract + data-prep guide in `HANDOUTS.md`.
 | `NNODES`, `NODE_RANK`, `HEAD_NODE_IP`, `NCCL_PORT` | multi-node (e.g. 16×H200); single-node otherwise |
 | `HF_TOKEN`, `WANDB_API_KEY` | secrets, via `-e` — never baked. No WANDB key ⇒ offline mode |
 | `SEQ_LEN`/`SEQUENCE_LEN`, `GLOBAL_BATCH_SIZE`, `MAX_STEPS`, `LR`, `EPOCHS` | recipe overrides (use small values for a single-GPU smoke) |
+| `RANK_MICROBATCH_TOKENS` | olmocore: per-DP-rank microbatch in tokens; per-**device** = ÷ cp. Spends spare VRAM on throughput (G stays fixed, grad-accum auto-derives). See [BATCHING.md](BATCHING.md) |
 | `OLMO_ATTN_BACKEND` / `ATTN_IMPL`, `OLMO_FP8` | force attention / FP8 recipe instead of auto |
 | `CODE_BRANCH` | which branch of this repo to pull (default `olmo3-sft`) |
 
@@ -88,7 +89,8 @@ FP8: `-e PRECISION=fp8`. **Full env contract + data-prep guide in `HANDOUTS.md`.
 Both frameworks train the SAME prepped examples (selected by `DATASET_NAME`). See `HANDOUTS.md` §6.
 
 ## Notes
-- **7B full-FT memory**: fp32 AdamW state ≈ 112 GB — tight on one 96 GB RTX 6000; use ≥2 GPUs
-  (FSDP shards it) for the full recipe. Single-GPU is fine for a small-shape smoke.
-- **CP at seq 32768** auto-engages (`cp_degree=2`) and needs ≥2 GPUs — another reason to smoke
-  at `SEQ_LEN=2048` on a single card.
+- **7B full-FT memory**: fp32 AdamW state ≈ 112 GB, sharded across all GPUs (FSDP) — ≈28 GB/GPU
+  on 4 GPUs. Use ≥2 GPUs for the full recipe; single-GPU is fine only for a small-shape smoke.
+- **CP at seq 65536** auto-engages (`cp_degree=4`, cap 16384 tok/device) and needs ≥4 GPUs — smoke
+  at `SEQ_LEN=2048` on a single card. Global batch / per-device microbatch tuning: see
+  **[BATCHING.md](BATCHING.md)** (why 65536, the G = rmb × dp × accum identity, and the knobs).

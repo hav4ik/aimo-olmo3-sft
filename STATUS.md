@@ -37,8 +37,13 @@ only Dockerfile changes need a rebuild+push.
   Memory = sharding (FSDP for params, CP for activations); DP = throughput only (more DP ⇒ more
   activation, not less). cp_degree auto = ceil(SEQ_LEN / 16384) on H100/H200 (16384 = AI2's H100-tuned
   constant `MAX_RANK_MICROBATCH_SIZE_TOKENS`, NOT a hardware limit — 96 GB cards hold more).
-  `OLMO_MAX_RANK_TOKENS` knob was added then **removed** (default fits); re-add if throughput tuning
-  wanted (raise cap → fewer cp → more dp → spends spare VRAM for speed).
+  `OLMO_MAX_RANK_TOKENS` (cap → cp) knob was added then **removed** (default fits); re-add if cp
+  tuning wanted (raise cap → fewer cp → more contiguous activation/device → spends spare VRAM).
+- **Batch/microbatch tuning (NEW, see [BATCHING.md](BATCHING.md)):** `GLOBAL_BATCH_SIZE` sets global
+  tokens/batch G; `RANK_MICROBATCH_TOKENS` sets per-DP-rank microbatch (per-**device** = ÷ cp; at
+  65536 → cp=4). Identity `G = rmb × dp_world × grad_accum`; grad-accum auto-derived so G is fixed
+  across any node count. E.g. `RANK_MICROBATCH_TOKENS=262144` → per-device 65536 (4×), grad-accum 4
+  on 4 GPUs. Both knobs in `olmocore/run.sh`; off by default ⇒ no-env run is AI2 bit-for-bit.
 - Image: torch 2.10.0+cu130, transformers 5.9.0, NCCL 2.28.9, FA2 sm90;100;120 + FA3 + FA4. nvrtc/TE
   linker fix **baked** (read-only-Singularity safe).
 - **⚠ Checkpoint path wart (NOT fixed):** writes to

@@ -115,6 +115,17 @@ RUN_NAME="${RUN_NAME:-olmo3-${MODEL_SIZE}-sft-$PRECISION}"
 DUR_UNIT="${DUR_UNIT:-epochs}"; DUR_VAL="${EPOCHS:-2}"
 [ -n "${MAX_STEPS:-}" ] && { DUR_UNIT=steps; DUR_VAL="$MAX_STEPS"; }
 
+# Optional overrides appended to the train command (off by default => AI2 auto-derivation).
+#  RANK_MICROBATCH_TOKENS: per-DP-rank microbatch in TOKENS, must be a multiple of SEQ_LEN
+#    (262144 = 4x65536 = 4 sequences/microstep). By default BatchSizeConfig caps this at
+#    16384*cp (= 1 sequence) and pads out the rest with grad-accum. Raise it to pack more
+#    sequences per microstep and spend spare VRAM on throughput. We do NOT set grad-accum:
+#    the trainer recomputes it from global_batch_size, so GBS stays fixed at 1M across any
+#    node count / microbatch (grad_accum = GBS / (this * dp_world_size); must be a +integer).
+#    With cp=4 the per-GPU activation is this/cp tokens (262144 -> 65536 tok/GPU, 4x default).
+EXTRA=()
+[ -n "${RANK_MICROBATCH_TOKENS:-}" ] && EXTRA+=("--train_module.rank_microbatch_size=$RANK_MICROBATCH_TOKENS")
+
 # ---- Multi-node launch ------------------------------------------------------------------------
 # The container owns the whole node and torchrun spawns one rank per local GPU (--nproc_per_node);
 # torchrun sets each rank's RANK/LOCAL_RANK/WORLD_SIZE. Node topology, in priority order:
@@ -159,4 +170,5 @@ exec torchrun "${RDZV[@]}" --nproc_per_node="$NPROC" \
     --global_batch_size="${GLOBAL_BATCH_SIZE:-$DEF_GBS}" \
     --dataset_path="$DATASET" \
     --train_module.optim.lr="${LR:-$DEF_LR}" \
-    --trainer.max_duration.value="$DUR_VAL" --trainer.max_duration.unit="$DUR_UNIT"
+    --trainer.max_duration.value="$DUR_VAL" --trainer.max_duration.unit="$DUR_UNIT" \
+    ${EXTRA[@]+"${EXTRA[@]}"}

@@ -15,8 +15,9 @@ which is in the stop set, so any stack respecting `generation_config` stops corr
 | lr | 5e-5 | 5e-5 ✓ | 5e-5 (to apply) |
 | epochs | 2 | 2 ✓ | 2 (to apply) |
 | betas / wd / warmup / grad-norm | (0.9,0.95)/0/0.03→0/1.0 | ✓/✓/✓/✓ | ✓/✓/✓/✓ |
-| global batch | 1,048,576 tok (fixed) | 1,048,576 ✓ | micro×accum (tune to match) |
-| seq length | 32768 | 32768 ✓ | 32768 (tunable) |
+| global batch | 1,048,576 tok (fixed) | 1,048,576 ✓ (tune via `GLOBAL_BATCH_SIZE` / `RANK_MICROBATCH_TOKENS`, see [BATCHING.md](BATCHING.md)) | micro×accum (tune to match) |
+| seq length | 32768 | **65536** (DEVIATION: no-truncation for our long-tail proof data, see [BATCHING.md](BATCHING.md) §1) | 32768 → 65536 (SP) |
+| context-parallel `cp` | auto 2 @ 32768 | **auto 4 @ 65536** (cap 16384 tok/device) | `context_parallel_size` |
 | Attention | **flash_2** (factory default) | flash_2 baseline; **flash_3 packed-varlen on the Hopper launcher** | flash_attention_3 (packed) / flex |
 | Loss kernel | OLMo-core fused | fused ✓ | Cut Cross Entropy |
 | RoPE / z-loss | YaRN / none | YaRN / none ✓ | model default / none |
