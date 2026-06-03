@@ -26,10 +26,9 @@ bit-for-bit EXCEPT the fused-linear CE default — DIFF #5; set OLMO_FUSED_LCE=0
      the full (T, vocab) logits + fp32 upcast. Matches AI2's OWN long-context / hybrid SFT
      scripts (which set loss_implementation=fused_linear); only the plain Olmo-3-7B-SFT.py
      (seq 32768) left it off. ~10 GB saved at seq 65536, no recompute. OLMO_FUSED_LCE=0 = reference.
-  6. Context parallelism = Ulysses ONLY (vs the reference's llama3 ring): all-to-all is bandwidth-
-     bound/PCIe-friendly, handles intra-doc masking, needs n_heads % cp == 0. Matches AI2's
-     long-context SFT (OLMo-hybrid-7B-sft-think). cp is REQUIRED to fit within one node
-     (cp_degree <= GPUS_PER_NODE) so the all-to-all stays intra-node; scale across nodes via dp.
+  6. OLMO_CP_STYLE (default ring): context-parallel comm style. ring (llama3, doc-mask-aware) is the
+     proven default; ulysses (all-to-all, PCIe-friendlier) is opt-in — it tripped a device-side index
+     assert on our cp=4 + intra-doc + compile config, so it's gated until debugged.
   7. OLMO_AC_BUDGET (opt-in): activation checkpointing mode. Unset = reference selected_modules
      (recompute every FFN). <0..1> = budget mode (compiler picks the optimal recompute set for that
      memory fraction; high ~0.8 recomputes less = faster when not memory-bound). 'none' = no AC.
@@ -445,26 +444,31 @@ class SFTConfig(Config):
                 activation_memory_budget=float(_ac_budget),
             )
 
-        # DIFF #6: context parallelism = Ulysses ONLY (we deliberately don't support ring — one
-        # well-understood path). Ulysses does 2 all-to-all/layer (seq<->head exchange): bandwidth-bound
-        # and friendly on PCIe/NVLink, vs the reference's llama3 ring (per-layer P2P K/V, latency-bound).
-        # It handles intra-document masking natively (reconstructs full seqs via all-to-all) and needs
-        # n_heads % cp == 0 (7B: 32 % 4 = 0). This is AI2's own long-context-SFT choice
-        # (OLMo-hybrid-7B-sft-think.py, same packed/doc-masked/truncate dataset).
-        # CP MUST stay WITHIN ONE NODE: the all-to-all is cheap intra-node but slow over the inter-node
-        # fabric, so we require cp_degree <= GPUS_PER_NODE. olmo-core then packs cp + dp_shard into a
-        # node (shard_degree = GPUS_PER_NODE // cp) and scales across nodes via dp_replicate/dp_shard.
-        # cp_degree is auto-derived (=4 at seq 65536), so on >=4-GPU nodes it always fits.
+        # DIFF #6: context-parallel comm style. DEFAULT = ring (llama3, doc-mask-aware) — the PROVEN
+        # path (it's what our earlier run trained on). OLMO_CP_STYLE=ulysses opts into all-to-all
+        # (bandwidth-bound, PCIe-friendlier, AI2's long-context-SFT choice) — BUT on our config
+        # (cp=4 + intra-doc masking + torch.compile) it tripped a device-side index assert in the
+        # attention position/bucketize kernel (Ulysses passes FULL-sequence cu_doc_lens while the tensor
+        # is seq-sharded to 16384/rank -> OOB index). So ulysses stays opt-in until that's debugged.
+        # Ulysses needs n_heads % cp == 0 and cp within one node (cp<=GPUS_PER_NODE) for the all-to-all.
+        _cp_style = os.environ.get("OLMO_CP_STYLE", "ring").lower()
         if not bs_config.cp_degree:
             cp_config = None
-        else:
+        elif _cp_style == "ulysses":
             if bs_config.cp_degree > GPUS_PER_NODE:
                 raise OLMoConfigurationError(
-                    f"cp_degree={bs_config.cp_degree} > GPUS_PER_NODE={GPUS_PER_NODE}: Ulysses CP would "
-                    "span nodes (slow all-to-all over the inter-node fabric). Use a node with more GPUs, "
-                    "lower SEQ_LEN, or raise the per-rank token cap so cp fits within one node."
+                    f"ulysses cp_degree={bs_config.cp_degree} > GPUS_PER_NODE={GPUS_PER_NODE}: the "
+                    "all-to-all would span nodes. Use more GPUs/node, lower SEQ_LEN, or raise the cap."
                 )
             cp_config = TransformerContextParallelConfig.ulysses(degree=bs_config.cp_degree)
+        elif _cp_style == "ring":
+            cp_config = (
+                TransformerContextParallelConfig.llama3(degree=bs_config.cp_degree)
+                if dataset_config.generate_doc_lengths  # llama3 is doc-mask-aware; zigzag isn't
+                else TransformerContextParallelConfig.zig_zag(degree=bs_config.cp_degree)
+            )
+        else:
+            raise OLMoConfigurationError(f"OLMO_CP_STYLE='{_cp_style}' (want ring|ulysses)")
 
         dp_config = TransformerDataParallelConfig(
             name=DataParallelType.hsdp,
