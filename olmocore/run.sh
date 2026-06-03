@@ -55,8 +55,18 @@ if [ "${STAGE:-train}" = "convert" ] || [ ! -f "$CONVERT_DONE" ]; then
     if [ "$THIS_NODE_RANK" -eq 0 ]; then
         echo "[olmocore] converting $HF_MODEL -> $CKPT_DIR (one-time per volume; CPU)"
         rm -rf "$CKPT" "$CONVERT_DONE"
+        # The converter reads config.json via cached_path(), which treats a BARE HF repo id
+        # (e.g. allenai/Olmo-3-7B-Think) as a LOCAL path -> FileNotFoundError. So if HF_MODEL
+        # isn't already a local dir, stage it on the volume first; then both the config read
+        # and the weight load resolve on-disk. hf download is idempotent/resumable.
+        CONV_SRC="$HF_MODEL"
+        if [ ! -d "$HF_MODEL" ]; then
+            CONV_SRC="$DATA/hf_models/$HF_MODEL"
+            echo "[olmocore] staging HF model $HF_MODEL -> $CONV_SRC"
+            hf download "$HF_MODEL" --local-dir "$CONV_SRC"
+        fi
         python /workspace/OLMo-core/src/examples/huggingface/convert_checkpoint_from_hf.py \
-            --checkpoint-input-path "$HF_MODEL" --model-arch "${MODEL_ARCH:-olmo3_7b}" \
+            --checkpoint-input-path "$CONV_SRC" --model-arch "${MODEL_ARCH:-olmo3_7b}" \
             --tokenizer dolma2 --output-dir "$CKPT_DIR" --skip-validation
         touch "$CONVERT_DONE"
         echo "[olmocore] convert complete ($CONVERT_DONE)"
