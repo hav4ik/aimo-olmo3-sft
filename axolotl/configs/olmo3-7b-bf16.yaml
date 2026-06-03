@@ -88,7 +88,7 @@ save_total_limit: 5
 logging_steps: 1             # per-step loss/grad-norm so spikes are visible for the A/B
 output_dir: /data/checkpoints/olmo3-7b-bf16
 
-wandb_project: olmo3-sft
+wandb_project: olmo3-7b-sft
 wandb_name: olmo3-7b-bf16
 
 seed: 42

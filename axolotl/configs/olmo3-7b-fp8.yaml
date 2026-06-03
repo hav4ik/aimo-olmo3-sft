@@ -83,7 +83,7 @@ save_total_limit: 5
 logging_steps: 1
 output_dir: /data/checkpoints/olmo3-7b-fp8
 
-wandb_project: olmo3-sft
+wandb_project: olmo3-7b-sft
 wandb_name: olmo3-7b-fp8
 
 seed: 42
