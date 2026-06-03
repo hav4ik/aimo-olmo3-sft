@@ -9,9 +9,12 @@
 #                     run (one-time per /data/training volume, CPU; NODE_RANK=0 converts and
 #                     the other nodes wait). So a single `docker run` does convert+train.
 #   STAGE=convert  -> just (re)produce the distcp checkpoint and exit (explicit pre-stage).
-# Data: pre-staged OFFLINE with data_prep/prepare.sh onto the mount at $DATA/datasets/<NAME>/olmocore.
-# A single-GPU smoke needs small shapes: SEQ_LEN=2048 GLOBAL_BATCH_SIZE=4096 EPOCHS unset
-#   MAX_STEPS=10 (full recipe defaults are seq 32768 / 1,048,576 tok / 2 epochs, multi-GPU).
+# Data: olmo-core .npy pulled from HF at runtime (DATASET_HF + DATASET_SUBDIR, set by EXPERIMENT;
+#   rank-0 stages on the shared mount). Or pre-stage the .npy under $DATA/datasets/<NAME>/olmocore.
+# OLMO_MAX_RANK_TOKENS: per-rank activation budget (default 16384, 80GB-H100 tuned). Raise on bigger
+#   VRAM (e.g. 96GB RTX 6000) to use more memory + cut cp_degree so a longer SEQ_LEN fits on fewer GPUs.
+# A single-GPU smoke needs small shapes: SEQ_LEN=2048 GLOBAL_BATCH_SIZE=4096 MAX_STEPS=10
+#   (full recipe defaults are seq 65536 / 1,048,576 tok / 2 epochs, multi-GPU).
 set -euo pipefail
 
 # transformer_engine's _load_nvrtc() does `ldconfig -p | grep libnvrtc.so` at import;
