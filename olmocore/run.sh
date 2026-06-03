@@ -32,11 +32,14 @@ DATA=/data/training
 NPROC="${NPROC_PER_NODE:-$(nvidia-smi -L | wc -l)}"
 # Model + recipe by size (the EXPERIMENT/MODEL_SIZE front-end sets MODEL_SIZE; explicit env wins).
 MODEL_SIZE="${MODEL_SIZE:-7b}"
+# DEF_KEEP = default cap on persistent checkpoints kept on disk (distcp ~100 GB/7B, ~450 GB/32B vs
+# the ~1 TB budget): 7B keep 3 (~300 GB), 32B keep 2 (~900 GB). Override with OLMO_KEEP_LAST_CKPTS (0=all).
 case "$MODEL_SIZE" in
-    7b)  HF_MODEL="${HF_MODEL:-allenai/Olmo-3-7B-Think}";    MODEL_ARCH="${MODEL_ARCH:-olmo3_7b}";  DEF_LR=5e-5; DEF_GBS=1048576 ;;
-    32b) HF_MODEL="${HF_MODEL:-allenai/Olmo-3.1-32B-Think}"; MODEL_ARCH="${MODEL_ARCH:-olmo3_32b}"; DEF_LR=1e-4; DEF_GBS=4194304 ;;
+    7b)  HF_MODEL="${HF_MODEL:-allenai/Olmo-3-7B-Think}";    MODEL_ARCH="${MODEL_ARCH:-olmo3_7b}";  DEF_LR=5e-5; DEF_GBS=1048576; DEF_KEEP=3 ;;
+    32b) HF_MODEL="${HF_MODEL:-allenai/Olmo-3.1-32B-Think}"; MODEL_ARCH="${MODEL_ARCH:-olmo3_32b}"; DEF_LR=1e-4; DEF_GBS=4194304; DEF_KEEP=2 ;;
     *)   echo "ERROR: MODEL_SIZE='$MODEL_SIZE' (want 7b|32b)"; exit 2 ;;
 esac
+export OLMO_KEEP_LAST_CKPTS="${OLMO_KEEP_LAST_CKPTS:-$DEF_KEEP}"
 CKPT="${CKPT:-$DATA/checkpoints/olmocore-olmo3-${MODEL_SIZE}-think/model_and_optim}"
 CKPT_DIR="$(dirname "$CKPT")"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # this script's dir (cloned or baked)
@@ -187,7 +190,7 @@ fi
 # torchrun assigns the children's ranks; drop inherited process-level vars so they can't shadow it.
 unset RANK WORLD_SIZE GLOBAL_RANK LOCAL_RANK 2>/dev/null || true
 
-echo "[olmocore] $PRECISION | ${NNODES}x${NPROC} GPU cc=$CC | attn=$OLMO_ATTN_BACKEND | cp=ulysses | ac=${OLMO_AC_BUDGET:-selected_ffn} | fp8=${OLMO_FP8:-off}${OLMO_FP8_FSDP_ALLGATHER:+/ag} | optim=$OLMO_OPTIM | node ${NODE_RANK}/${NNODES} | $DUR_VAL $DUR_UNIT"
+echo "[olmocore] $PRECISION | ${NNODES}x${NPROC} GPU cc=$CC | attn=$OLMO_ATTN_BACKEND | cp=ulysses | ac=${OLMO_AC_BUDGET:-selected_ffn} | fp8=${OLMO_FP8:-off}${OLMO_FP8_FSDP_ALLGATHER:+/ag} | optim=$OLMO_OPTIM | ckpt=${OLMO_SAVE_INTERVAL:-1000}/${OLMO_EPHEMERAL_INTERVAL:-500}/keep${OLMO_KEEP_LAST_CKPTS} | node ${NODE_RANK}/${NNODES} | $DUR_VAL $DUR_UNIT"
 # Size-specific SFT script (local copy of AI2's, beaker-stubbed): Olmo-3-7B/32B-SFT-local.py.
 SFT_SCRIPT="$HERE/sft_scripts/Olmo-3-${MODEL_SIZE^^}-SFT-local.py"
 [ -f "$SFT_SCRIPT" ] || { echo "ERROR: no SFT script for MODEL_SIZE=$MODEL_SIZE at $SFT_SCRIPT"; exit 2; }

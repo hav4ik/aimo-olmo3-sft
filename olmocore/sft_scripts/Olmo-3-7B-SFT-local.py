@@ -37,6 +37,10 @@ bit-for-bit EXCEPT the fused-linear CE default — DIFF #5; set OLMO_FUSED_LCE=0
   8. OLMO_FP8_FSDP_ALLGATHER (opt-in, tensorwise only): all-gather params in fp8 -> halves HSDP
      all-gather bytes (comm win on PCIe). Built via AOFloat8LinearConfig.recommended() like AI2's
      official long-context script. Ignored (with a warning) on rowwise.
+  9. Checkpoint cadence + retention: OLMO_SAVE_INTERVAL / OLMO_EPHEMERAL_INTERVAL tune the save steps
+     (reference 1000 / 500); OLMO_KEEP_LAST_CKPTS caps PERSISTENT checkpoints on disk via the
+     KeepLastNCheckpoints callback (olmo-core only auto-prunes ephemeral). run.sh sets a per-size
+     default; 0 = keep all. Does not change training, only IO/disk.
 
 NOTHING ELSE DEVIATES — optimizer (SkipStepAdamW), hsdp, selective AC (feed_forward),
 compile_model=True, generate_doc_lengths=True, YaRN are all EXACTLY upstream.
@@ -69,7 +73,7 @@ from olmo_core.data import (
 )
 from olmo_core.data.types import LongDocStrategy
 from olmo_core.distributed.parallel import DataParallelType
-from olmo_core.distributed.utils import get_local_rank, get_rank
+from olmo_core.distributed.utils import get_fs_local_rank, get_local_rank, get_rank
 from olmo_core.exceptions import OLMoConfigurationError
 # --- LOCAL STUBS replacing olmo_core.internal.common (whose top-level `import
 #     beaker` makes the script unimportable off-cluster). See DIFF #1 in the header.
@@ -94,7 +98,7 @@ def get_beaker_username() -> str:
 def build_launch_config(**kwargs):
     return None  # no Beaker/Gantry launch locally; the `launch` subcommand is disabled
 # --- end local stubs ---
-from olmo_core.io import copy_dir, dir_is_empty, get_parent, join_path, list_directory
+from olmo_core.io import clear_directory, copy_dir, dir_is_empty, get_parent, join_path, list_directory
 from olmo_core.nn.attention import AttentionBackendName  # DIFF #4 (env attn backend)
 from olmo_core.nn.rope import YaRNRoPEScalingConfig
 from olmo_core.nn.transformer import TransformerConfig
@@ -112,6 +116,7 @@ from olmo_core.train.callbacks import (
     GarbageCollectorCallback,
     GPUMemoryMonitorCallback,
 )
+from olmo_core.train.callbacks.callback import Callback
 from olmo_core.train.callbacks.wandb import WandBCallback
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.train_module import (
@@ -302,6 +307,54 @@ def fp8_attention_ignores(model_config) -> List[str]:
         if name.endswith(".attention") and name.count(".") == 2:  # blocks.<i>.attention
             ignores.extend(f"{name}.{proj}" for proj in ("w_q", "w_k", "w_v", "w_out"))
     return ignores
+
+
+@dataclass
+class KeepLastNCheckpoints(Callback):
+    """DIFF #9: cap PERSISTENT (save_interval) checkpoints on disk to `keep_last`, deleting the oldest
+    as new ones are written. olmo-core's CheckpointerCallback only auto-prunes EPHEMERAL checkpoints,
+    so persistent ones (distcp ~100 GB/7B, ~450 GB/32B) accumulate unbounded and blow a fixed storage
+    budget. We delete only checkpoints older than the keep window (long finalized) — never the most
+    recent N — so async saves and resume are unaffected. The final end-of-training checkpoint (saved
+    at the last step, not an interval) counts toward the cap. keep_last<=0 disables. save_interval MUST
+    match the CheckpointerCallback's so persistent saves are tagged (ephemeral steps are skipped)."""
+
+    keep_last: int = 0
+    save_interval: int = 1000
+    _persistent: List[str] = field(default_factory=list)
+
+    def _is_persistent(self) -> bool:
+        if self.save_interval > 0 and self.step % self.save_interval == 0:
+            return True
+        max_steps = getattr(self.trainer, "max_steps", None)  # the sync end-of-training checkpoint
+        return max_steps is not None and self.step == max_steps
+
+    def pre_train(self):
+        if self.keep_last <= 0:
+            return
+        try:  # on resume, seed from persistent checkpoints already on disk so they're pruned too
+            found = []
+            for p in list_directory(self.trainer.save_folder):
+                name = str(p).rstrip("/").split("/")[-1]
+                if name.startswith("step") and name[4:].isdigit() and int(name[4:]) % self.save_interval == 0:
+                    found.append((int(name[4:]), str(p)))
+            self._persistent = [p for _, p in sorted(found)]
+            if self._persistent:
+                log.info(f"[retention] tracking {len(self._persistent)} existing persistent checkpoint(s)")
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"[retention] could not scan existing checkpoints: {e}")
+
+    def post_checkpoint_saved(self, path):
+        if self.keep_last <= 0 or not self._is_persistent():
+            return
+        self._persistent.append(str(path))
+        while len(self._persistent) > self.keep_last:
+            old = self._persistent.pop(0)
+            if get_fs_local_rank() == 0:
+                log.info(f"[retention] pruning old persistent checkpoint {old} (keep_last={self.keep_last})")
+                self.trainer.run_bookkeeping_op(
+                    clear_directory, old, op_name=f"prune_checkpoint {old}", distributed=False
+                )
 
 
 @dataclass
@@ -498,6 +551,15 @@ class SFTConfig(Config):
                 lr=8e-05, weight_decay=0.0, betas=(0.9, 0.95), compile=False
             )
 
+        # Checkpoint cadence + retention (env-tunable). Persistent every OLMO_SAVE_INTERVAL steps,
+        # ephemeral (rotating resume points) every OLMO_EPHEMERAL_INTERVAL. OLMO_KEEP_LAST_CKPTS caps
+        # PERSISTENT checkpoints on disk (olmo-core only auto-prunes ephemeral); run.sh defaults it per
+        # model size since distcp checkpoints are ~100 GB (7B) / ~450 GB (32B) and the budget is ~1 TB.
+        # 0 = keep all. ephemeral_interval must be < save_interval (olmo-core asserts this).
+        _save_interval = int(os.environ.get("OLMO_SAVE_INTERVAL", "1000"))
+        _ephemeral_interval = int(os.environ.get("OLMO_EPHEMERAL_INTERVAL", "500"))
+        _keep_last = int(os.environ.get("OLMO_KEEP_LAST_CKPTS", "0"))
+
         config = SFTConfig(
             run_name=run_name,
             launch=build_launch_config(
@@ -560,8 +622,14 @@ class SFTConfig(Config):
             .with_callback(
                 "checkpointer",
                 CheckpointerCallback(
-                    save_interval=1000, ephemeral_save_interval=500, save_async=True
+                    save_interval=_save_interval,
+                    ephemeral_save_interval=_ephemeral_interval,
+                    save_async=True,
                 ),
+            )
+            .with_callback(
+                "checkpoint_retention",
+                KeepLastNCheckpoints(keep_last=_keep_last, save_interval=_save_interval),
             )
             .with_callback(
                 "wandb",
