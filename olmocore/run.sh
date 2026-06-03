@@ -11,8 +11,6 @@
 #   STAGE=convert  -> just (re)produce the distcp checkpoint and exit (explicit pre-stage).
 # Data: olmo-core .npy pulled from HF at runtime (DATASET_HF + DATASET_SUBDIR, set by EXPERIMENT;
 #   rank-0 stages on the shared mount). Or pre-stage the .npy under $DATA/datasets/<NAME>/olmocore.
-# OLMO_MAX_RANK_TOKENS: per-rank activation budget (default 16384, 80GB-H100 tuned). Raise on bigger
-#   VRAM (e.g. 96GB RTX 6000) to use more memory + cut cp_degree so a longer SEQ_LEN fits on fewer GPUs.
 # A single-GPU smoke needs small shapes: SEQ_LEN=2048 GLOBAL_BATCH_SIZE=4096 MAX_STEPS=10
 #   (full recipe defaults are seq 65536 / 1,048,576 tok / 2 epochs, multi-GPU).
 set -euo pipefail

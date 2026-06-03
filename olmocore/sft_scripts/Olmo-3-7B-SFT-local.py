@@ -115,12 +115,7 @@ DEFAULT_NUM_NODES = 1
 # DIFF #2: upstream hardcodes 8; take it from torchrun (LOCAL_WORLD_SIZE = nproc
 # per node) so the 1/2/8/16-GPU shapes compute the right world_size/shard_degree.
 GPUS_PER_NODE = int(os.environ.get("LOCAL_WORLD_SIZE", "8"))
-# Max tokens one rank holds per micro-batch (activation budget); drives cp_degree + grad-accum.
-# AI2's 16384 is tuned for an 80GB H100; default keeps a no-env run AI2-exact. Override with
-# OLMO_MAX_RANK_TOKENS on bigger cards (e.g. 96GB RTX 6000) to use more VRAM and cut cp_degree, so a
-# longer SEQ_LEN fits on fewer GPUs (e.g. 32768 -> 65536 needs only cp=2 instead of 4). Raise it
-# CAUTIOUSLY — it's an activation budget; set it past what the forward/backward fits and you OOM.
-MAX_RANK_MICROBATCH_SIZE_TOKENS = int(os.environ.get("OLMO_MAX_RANK_TOKENS", "16384"))
+MAX_RANK_MICROBATCH_SIZE_TOKENS = 16_384  # max tokens this config can handle on an H100
 
 
 @dataclass
