@@ -143,6 +143,24 @@ if ! ls "$DATASET"/token_ids_part_*.npy >/dev/null 2>&1; then
     fi
 fi
 RUN_NAME="${RUN_NAME:-olmo3-${MODEL_SIZE}-sft-$PRECISION}"
+# Append a launch suffix (DDMMYYYY-HHMM, container clock) so each run is distinct in W&B and gets its
+# own checkpoint dir. It also feeds the multi-node rendezvous id + save_folder, so ALL ranks must agree:
+# node-0 stamps it and shares via a sentinel (a per-node `date` could differ across a minute boundary
+# -> mismatched names -> broken DDP). RUN_SUFFIX=<v> sets it explicitly (recommended for multi-node,
+# e.g. the job id); RUN_SUFFIX=none keeps a stable, resumable name. NOTE: an auto suffix makes each
+# launch a FRESH run (no auto-resume) — to resume, pass the same RUN_NAME or RUN_SUFFIX.
+SUFFIX="${RUN_SUFFIX:-auto}"
+if [ "$SUFFIX" = "auto" ]; then
+    SFX_FILE="$DATA/.run_suffix"
+    if [ "$THIS_NODE_RANK" -eq 0 ]; then
+        SUFFIX="$(date +%d%m%Y-%H%M)"; printf '%s' "$SUFFIX" > "$SFX_FILE"
+    else
+        for _ in $(seq 1 120); do [ -s "$SFX_FILE" ] && break; sleep 1; done
+        SUFFIX="$(cat "$SFX_FILE" 2>/dev/null)" || SUFFIX="$(date +%d%m%Y-%H%M)"
+    fi
+fi
+case "$SUFFIX" in none|"") : ;; *) RUN_NAME="${RUN_NAME}-${SUFFIX}" ;; esac
+echo "[olmocore] run: $RUN_NAME"
 DUR_UNIT="${DUR_UNIT:-epochs}"; DUR_VAL="${EPOCHS:-2}"
 [ -n "${MAX_STEPS:-}" ] && { DUR_UNIT=steps; DUR_VAL="$MAX_STEPS"; }
 
