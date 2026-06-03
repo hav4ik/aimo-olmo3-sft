@@ -18,6 +18,18 @@ RUN set -e; d="$(dirname "$(find /opt/conda -name 'libnvrtc.so*' | head -1)")"; 
 COPY bootstrap.sh /usr/local/bin/bootstrap.sh
 RUN chmod +x /usr/local/bin/bootstrap.sh && (command -v git >/dev/null || (apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*))
 
+# Context-parallel (ring) attention dependency. OLMo-core's FA2 backend requires ring-flash-attn for
+# CP — our DEFAULT path (cp=4 auto-engages at seq 65536). It's a pure-Python wrapper over the baked
+# flash_attn, so no compile. We ALSO shim a transformers-5.x symbol move
+# (is_flash_attn_greater_or_equal_2_10 moved to transformers.utils) that ring_flash_attn's hf adapter
+# still imports from the old path — without it `import ring_flash_attn` raises ImportError, olmo-core's
+# try/except swallows it, and CP dies with "requires the ring-flash-attn package". Build-time import
+# check fails the build if either piece is wrong. (Same recipe baked into the axolotl image.)
+RUN pip install --no-cache-dir "ring-flash-attn>=0.1.7" \
+ && F="$(python -c 'import transformers.modeling_flash_attention_utils as m; print(m.__file__)')" \
+ && echo "from transformers.utils import is_flash_attn_greater_or_equal_2_10  # shim: ring_flash_attn hf_adapter on transformers 5.x" >> "$F" \
+ && python -c "import ring_flash_attn; print('ring-flash-attn OK')"
+
 # Code is cloned into the mounted run storage at runtime (single source = the git ref); pin a run
 # with CODE_REF=<branch|tag|commit>. CODE_DIR must live on a writable mount (the bound /data/training).
 ENV CODE_REPO=https://github.com/hav4ik/aimo-olmo3-sft \
