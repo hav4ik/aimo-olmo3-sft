@@ -1,10 +1,13 @@
 # Base image Dockerfiles (reference)
 
 The deploy images (`docker/Dockerfile.{olmocore,axolotl}`) are **thin layers** on prebuilt base
-images. Those bases are built in the sibling fork repos; the Dockerfiles are copied here so the full
-build chain is documented in one place. **They build with their ORIGINAL repo as the context** (they
-COPY that repo's source) — not from this repo. Copies here may drift from the forks; the forks are
-the source of truth.
+images. The **olmo-core SFT base** is built from THIS repo's `Dockerfile.olmo-core-sft`, which
+**`git clone`s the olmo_core source from the fork (`hav4ik/OLMo-core@olmo3-sft`) at build time** — so
+it's reproducible from GitHub with no local checkout (`OLMO_CORE_REF` pins the branch/tag/`main`).
+The **official deps base** and the **axolotl base** are still built in their sibling fork repos (heavy,
+rarely rebuilt); those Dockerfiles are copied here for documentation and build with their own repo as
+context. The forks are the source of truth (`main` = upstream sync, `olmo3-sft` = our divergence:
+FA2 sm120 build + the fused-CE z-loss fix).
 
 ## Build chain
 
@@ -13,8 +16,8 @@ OLMo-core/src/Dockerfile            ──>  olmo-core:cu130-2.10.0      (AI2 of
   (= Dockerfile.olmo-core-official)        FA2 sm90;100;120 + FA3 + FA4 + TransformerEngine + liger)
         │
         ▼
-OLMo-core/docker/Dockerfile.runtime ──>  olmo-core-sft:cu130         (+ pinned olmo_core source, baked)
-  (= Dockerfile.olmo-core-sft)
+docker/base/Dockerfile.olmo-core-sft──>  olmo-core-sft:cu130         (git-clones hav4ik/OLMo-core@olmo3-sft
+  (THIS repo, clone-based)                   from GitHub; deps already in the official base)
         │
         ▼
 docker/Dockerfile.olmocore          ──>  chankhavu/olmo3-olmocore:cu130   (bootstrap + nvrtc fix)
@@ -36,9 +39,10 @@ open-instruct/Dockerfile.dataprep   ──>  open-instruct-dataprep:0.1.0     (O
 cd OLMo-core && make docker-image            # -> olmo-core:tch2.10.0cu130-<date>
 docker tag olmo-core:tch2.10.0cu130-<date> olmo-core:cu130-2.10.0
 
-# 2. OLMo-core SFT base (bakes the olmo_core source onto the official base):
-cd OLMo-core && docker build -f docker/Dockerfile.runtime \
-  --build-arg BASE_IMAGE=olmo-core:cu130-2.10.0 -t olmo-core-sft:cu130 .
+# 2. OLMo-core SFT base — CLONES the olmo_core source from the fork onto the official base (no local
+#    checkout needed; OLMO_CORE_REF pins the branch/tag, default olmo3-sft; context is unused):
+cd aimo-olmo3-sft && docker build -f docker/base/Dockerfile.olmo-core-sft \
+  --build-arg BASE_IMAGE=olmo-core:cu130-2.10.0 -t olmo-core-sft:cu130 docker/base/
 
 # 3. open-instruct data-prep image (offline tokenizer; version pinned via SETUPTOOLS_SCM_PRETEND_VERSION):
 cd open-instruct && docker build -f Dockerfile.dataprep -t open-instruct-dataprep:0.1.0 .
