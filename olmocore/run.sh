@@ -81,6 +81,20 @@ fi
 
 PRECISION="${PRECISION:-bf16}"
 CC="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1)"
+# FP8 GEMM (torch._scaled_mm via cuBLASLt) is implemented for Hopper (sm_90) and datacenter Blackwell
+# (sm_100). On sm_120 (RTX PRO 6000 workstation Blackwell) cuBLASLt has no FP8 algorithm and the first
+# step dies with CUBLAS_STATUS_NOT_SUPPORTED in _scaled_mm. Refuse early with a clear message instead
+# of crashing after convert+load+compile. FP8 is intended for the H200 runs anyway. Override: OLMO_FORCE_FP8=1.
+if [ "$PRECISION" = "fp8" ] && [ -z "${OLMO_FORCE_FP8:-}" ]; then
+    case "$CC" in
+        9.*|10.*) : ;;   # Hopper / datacenter Blackwell: FP8 scaled-mm supported
+        *) echo "ERROR: PRECISION=fp8 unsupported on this GPU (compute cap $CC)."
+           echo "       FP8 _scaled_mm needs sm_90 (Hopper) or sm_100 (B200); sm_120 (RTX PRO 6000) fails"
+           echo "       with CUBLAS_STATUS_NOT_SUPPORTED. Use PRECISION=bf16 here; FP8 is for the H200 runs."
+           echo "       (Set OLMO_FORCE_FP8=1 to attempt it anyway.)"
+           exit 2 ;;
+    esac
+fi
 case "$CC" in 9.*) DEFATTN=flash_3 ;; *) DEFATTN=flash_2 ;; esac
 export OLMO_ATTN_BACKEND="${OLMO_ATTN_BACKEND:-$DEFATTN}"
 export OLMO_SFT_SAVE_ROOT="$DATA/checkpoints"
