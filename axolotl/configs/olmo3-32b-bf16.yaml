@@ -19,8 +19,7 @@ plugins:
 chat_template: tokenizer_default
 # Local parquet from data_prep/prepare.sh; axolotl/run.sh substitutes the real path (DATASET_NAME).
 datasets:
-  - path: __DATASET_PARQUET__
-    ds_type: parquet
+  - path: __DATASET__
     type: chat_template
     field_messages: messages
 dataset_prepared_path: /data/last_run_prepared

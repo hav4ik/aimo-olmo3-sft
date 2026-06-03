@@ -1,7 +1,8 @@
 #!/bin/bash
-# In-container Axolotl SFT run. Reads the OFFLINE-prepped local parquet produced by
-# data_prep/prepare.sh --name $DATASET_NAME  (-> /data/training/datasets/$NAME/messages.parquet);
-# the base model downloads from HF (HF_TOKEN). attn auto by GPU arch: sm_90 (H100/H200) ->
+# In-container Axolotl SFT run. Loads + tokenizes the dataset ONLINE from HF (DATASET_HF, set by
+# EXPERIMENT) — the axolotl messages parquet is large (~120 GB) so we don't pre-stage it; axolotl
+# downloads the dataset and tokenizes at launch (cached under /data/training/last_run_prepared).
+# The base model downloads from HF (HF_TOKEN). attn auto by GPU arch: sm_90 (H100/H200) ->
 # flash_attention_3; else (sm_120 RTX PRO 6000 / Blackwell) -> flex_attention. Ckpts under /data/training.
 #   MODEL_SIZE=7b|32b + PRECISION=bf16|fp8 -> configs/olmo3-<size>-<precision>.yaml ; DATASET_NAME = data.
 #   Single-GPU smoke: SEQUENCE_LEN=2048 MAX_STEPS=10 (full recipe = seq 32768 / 2 epochs).
@@ -13,16 +14,19 @@ PRECISION="${PRECISION:-bf16}"
 MODEL_SIZE="${MODEL_SIZE:-7b}"   # 7b | 32b (32b = the axolotl fallback path for the big tier)
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # works whether code is cloned or baked
 CONFIG="${CONFIG:-$HERE/configs/olmo3-${MODEL_SIZE}-${PRECISION}.yaml}"
-PARQUET="${DATASET_PARQUET:-$DATA/datasets/${DATASET_NAME:-tulu-math}/messages.parquet}"
-[ -s "$PARQUET" ] || { echo "ERROR: prepped data missing/empty: $PARQUET — run data_prep/prepare.sh --name ${DATASET_NAME:-tulu-math}"; exit 3; }
+# Dataset source axolotl loads + tokenizes online. DATASET_HF (HF dataset id, set by EXPERIMENT) by
+# default; override with DATASET_SRC (any HF id / local path axolotl can load — e.g. a tiny set +
+# MAX_STEPS for a smoke, to avoid pulling the full dataset).
+DATASET_SRC="${DATASET_SRC:-${DATASET_HF:-}}"
+[ -n "$DATASET_SRC" ] || { echo "ERROR: no dataset — set EXPERIMENT, or DATASET_HF / DATASET_SRC=<hf-dataset-id>"; exit 3; }
 
 CC="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1)"
 case "$CC" in 9.*) DEFATTN=flash_attention_3 ;; *) DEFATTN=flex_attention ;; esac
 ATTN="${ATTN_IMPL:-$DEFATTN}"
 
-# materialize the config with the prepped parquet path substituted in
+# materialize the config with the dataset source substituted in
 CFG=/tmp/axolotl-config.yaml
-sed "s|__DATASET_PARQUET__|$PARQUET|g" "$CONFIG" > "$CFG"
+sed "s|__DATASET__|$DATASET_SRC|g" "$CONFIG" > "$CFG"
 
 OVERRIDES=(
     "--attn_implementation=$ATTN"

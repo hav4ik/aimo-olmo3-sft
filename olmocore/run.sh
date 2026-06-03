@@ -154,7 +154,7 @@ SFT_SCRIPT="$HERE/sft_scripts/Olmo-3-${MODEL_SIZE^^}-SFT-local.py"
 exec torchrun "${RDZV[@]}" --nproc_per_node="$NPROC" \
     "$SFT_SCRIPT" \
     train "$RUN_NAME" "$CKPT" "${CLUSTER:-local_h100}" \
-    --seq_len="${SEQ_LEN:-32768}" --num_nodes="$NNODES" \
+    --seq_len="${SEQ_LEN:-65536}" --num_nodes="$NNODES" \
     --global_batch_size="${GLOBAL_BATCH_SIZE:-$DEF_GBS}" \
     --dataset_path="$DATASET" \
     --train_module.optim.lr="${LR:-$DEF_LR}" \
