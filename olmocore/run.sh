@@ -187,7 +187,7 @@ fi
 # torchrun assigns the children's ranks; drop inherited process-level vars so they can't shadow it.
 unset RANK WORLD_SIZE GLOBAL_RANK LOCAL_RANK 2>/dev/null || true
 
-echo "[olmocore] $PRECISION | ${NNODES}x${NPROC} GPU cc=$CC | attn=$OLMO_ATTN_BACKEND | fp8=${OLMO_FP8:-off} | optim=$OLMO_OPTIM | node ${NODE_RANK}/${NNODES} | $DUR_VAL $DUR_UNIT"
+echo "[olmocore] $PRECISION | ${NNODES}x${NPROC} GPU cc=$CC | attn=$OLMO_ATTN_BACKEND | cp=${OLMO_CP_STYLE:-ulysses} | fp8=${OLMO_FP8:-off} | optim=$OLMO_OPTIM | node ${NODE_RANK}/${NNODES} | $DUR_VAL $DUR_UNIT"
 # Size-specific SFT script (local copy of AI2's, beaker-stubbed): Olmo-3-7B/32B-SFT-local.py.
 SFT_SCRIPT="$HERE/sft_scripts/Olmo-3-${MODEL_SIZE^^}-SFT-local.py"
 [ -f "$SFT_SCRIPT" ] || { echo "ERROR: no SFT script for MODEL_SIZE=$MODEL_SIZE at $SFT_SCRIPT"; exit 2; }

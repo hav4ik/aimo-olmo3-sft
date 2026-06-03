@@ -26,6 +26,10 @@ bit-for-bit EXCEPT the fused-linear CE default — DIFF #5; set OLMO_FUSED_LCE=0
      the full (T, vocab) logits + fp32 upcast. Matches AI2's OWN long-context / hybrid SFT
      scripts (which set loss_implementation=fused_linear); only the plain Olmo-3-7B-SFT.py
      (seq 32768) left it off. ~10 GB saved at seq 65536, no recompute. OLMO_FUSED_LCE=0 = reference.
+  6. OLMO_CP_STYLE (default ulysses): context-parallel comm style. Ulysses all-to-all (bandwidth-
+     bound, PCIe-friendly) vs the reference's llama3 ring (P2P, latency-bound). Matches AI2's
+     long-context SFT (OLMo-hybrid-7B-sft-think); needs n_heads % cp == 0. OLMO_CP_STYLE=ring +
+     OLMO_RING_HEAD_STRIDE restore/tune the ring path.
 
 NOTHING ELSE DEVIATES — optimizer (SkipStepAdamW), hsdp, selective AC (feed_forward),
 compile_model=True, generate_doc_lengths=True, YaRN are all EXACTLY upstream.
@@ -362,15 +366,31 @@ class SFTConfig(Config):
             modules=["blocks.*.feed_forward"],
         )
 
-        cp_config = (
-            (
-                TransformerContextParallelConfig.llama3(degree=bs_config.cp_degree)
-                if dataset_config.generate_doc_lengths  # only use llama3 if we're masking docs
+        # DIFF #6: context-parallel comm style. Our data uses intra-document masking
+        # (generate_doc_lengths), so what varies is the cp comm algorithm:
+        #   - ULYSSES (default): 2 all-to-all/layer (seq<->head exchange) — bandwidth-bound, far
+        #     friendlier on a PCIe/no-NVLink box than ring's per-layer P2P K/V passing. Needs
+        #     n_heads % cp == 0 (7B: 32 % 4 = 0). Handles doc boundaries natively (reconstructs
+        #     full seqs via all-to-all). This is AI2's OWN long-context-SFT choice
+        #     (OLMo-hybrid-7B-sft-think.py: ulysses + the same packed/doc-masked/truncate dataset).
+        #   - RING: P2P K/V ring; llama3 variant is doc-mask-aware (zigzag is not). OLMO_RING_HEAD_STRIDE>1
+        #     processes more KV heads/iter => fewer comm ops (AI2's long-context scripts use 4). Use
+        #     ring only if cp ever exceeds n_heads (head-sharding can't divide far enough).
+        # The plain Olmo-3-7B-SFT.py reference uses llama3 ring; we default to ulysses for 65536.
+        _cp_style = os.environ.get("OLMO_CP_STYLE", "ulysses").lower()
+        if not bs_config.cp_degree:
+            cp_config = None
+        elif _cp_style == "ulysses":
+            cp_config = TransformerContextParallelConfig.ulysses(degree=bs_config.cp_degree)
+        elif _cp_style == "ring":
+            _stride = int(os.environ.get("OLMO_RING_HEAD_STRIDE", "1"))
+            cp_config = (
+                TransformerContextParallelConfig.llama3(degree=bs_config.cp_degree, head_stride=_stride)
+                if dataset_config.generate_doc_lengths  # llama3 is doc-mask-aware; zigzag isn't
                 else TransformerContextParallelConfig.zig_zag(degree=bs_config.cp_degree)
             )
-            if bs_config.cp_degree
-            else None
-        )
+        else:
+            raise OLMoConfigurationError(f"OLMO_CP_STYLE='{_cp_style}' (want ulysses|ring)")
 
         dp_config = TransformerDataParallelConfig(
             name=DataParallelType.hsdp,
