@@ -17,17 +17,15 @@ RANK="${NODE_RANK:-${GLOBAL_RANK:-0}}"
 
 # Mirror ALL output (this script + the exec'd entrypoint/run.sh/torchrun) to a per-rank log file
 # on the writable run storage, so you can `tail -f` it from a SEPARATE shell into the container
-# (the launching session is often a Jupyter terminal a remote shell can't see). Disable with
-# LOG_TO_FILE=0; relocate with LOG_DIR. A logging failure must never abort the run, so it's guarded.
-if [ "${LOG_TO_FILE:-1}" != "0" ]; then
-    LOG_DIR="${LOG_DIR:-$(dirname "$DEST")/logs}"
-    if mkdir -p "$LOG_DIR" 2>/dev/null; then
-        LOG_FILE="$LOG_DIR/run-rank${RANK}.log"
-        echo "[bootstrap] logging to $LOG_FILE  (tail -f it from another shell)"
-        exec > >(tee -a "$LOG_FILE") 2>&1
-    else
-        echo "[bootstrap] WARN: $LOG_DIR not writable; console-only logging"
-    fi
+# (the launching session is often a Jupyter terminal a remote shell can't see). Fixed location,
+# no knob. Guarded so a logging failure never aborts the run.
+LOG_DIR=/data/training/logs
+if mkdir -p "$LOG_DIR" 2>/dev/null; then
+    LOG_FILE="$LOG_DIR/run-rank${RANK}.log"
+    echo "[bootstrap] logging to $LOG_FILE  (tail -f it from another shell)"
+    exec > >(tee -a "$LOG_FILE") 2>&1
+else
+    echo "[bootstrap] WARN: $LOG_DIR not writable; console-only logging"
 fi
 
 if [ "$RANK" -eq 0 ]; then
