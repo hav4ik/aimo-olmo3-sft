@@ -22,7 +22,16 @@ which is in the stop set, so any stack respecting `generation_config` stops corr
 | Loss kernel | OLMo-core fused | fused ✓ | Cut Cross Entropy |
 | RoPE / z-loss | YaRN / none | YaRN / none ✓ | model default / none |
 | Context parallelism | auto `cp_degree=2` @ seq 32768 | **auto** ✓ (AI2's `BatchSizeConfig`; llama3 ring + doc mask) | `context_parallel_size` (ring) |
-| FP8 *training* | **no — bf16** | **off by default (bf16)**, matching AI2 + NVIDIA Nemotron Nano (both post-train bf16, PTQ→FP8 only for inference); opt-in `OLMO_FP8=tensorwise\|rowwise` (keeps the 8 full-attention blocks' q/k/v/o + lm_head + embeddings high-precision) | `fp8: true` opt-in (validate) |
+| FP8 *training* | **no — bf16** | **off by default (bf16)**, matching AI2 + NVIDIA Nemotron Nano (both post-train bf16, PTQ→FP8 only for inference); opt-in `OLMO_FP8=tensorwise\|rowwise` (keeps the 8 full-attention blocks' q/k/v/o + lm_head + embeddings high-precision). **Scaling is arch-gated** (cuBLAS FP8 GEMM, see below) | `fp8: true` opt-in (validate) |
+
+**FP8 scaling by GPU arch** (verified `tools/fp8_probe.py`; `run.sh` auto-selects, explicit `OLMO_FP8` wins):
+
+| arch | rowwise (accurate, ship) | tensorwise (lower-acc, A/B) | use |
+|---|---|---|---|
+| sm_90 Hopper / sm_100 B200 | ✅ | ✅ | **rowwise — production FP8** (validate on Hopper once BF16 is stable) |
+| sm_120 RTX PRO 6000 | ❌ `CUBLAS_STATUS_NOT_SUPPORTED` | ✅ (fwd e4m3×e4m3 + bwd e5m2×e4m3) | **tensorwise — throughput comparison only** |
+
+(`e5m2×e5m2` GEMMs fail on every arch and never occur in training — forward is e4m3×e4m3, backward grads are mixed e5m2×e4m3.) Caveat: torchao 0.15.0 vs torch 2.10 skips cpp extensions → FP8 scaling uses ATen fallback; bump torchao for real Hopper FP8 perf.
 
 ## Chat format & stop tokens (the ChatML alignment)
 

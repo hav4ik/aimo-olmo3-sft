@@ -31,6 +31,16 @@ only Dockerfile changes need a rebuild+push.
   One container per node; `--nproc_per_node` = local GPUs.
 - Optimizer per precision: fused AdamW (bf16) / SkipStepAdamW (fp8) via `OLMO_OPTIM`. W&B on when
   `WANDB_API_KEY` set (entity/project env-driven; `WANDB_ENTITY`/`WANDB_PROJECT`).
+- **FP8 scaling is arch-dependent (VERIFIED via `tools/fp8_probe.py`):** `torch._scaled_mm`/cuBLASLt.
+  - **sm_90 (Hopper) / sm_100 (B200): ROWWISE** — accurate (per-row scale, DeepSeek recipe). The recipe
+    we ship for production. *Not yet run on Hopper — to validate once the BF16 path is stable.*
+  - **sm_120 (RTX PRO 6000 workstation Blackwell): rowwise → `CUBLAS_STATUS_NOT_SUPPORTED`** (no cuBLAS
+    algo). **TENSORWISE works** end-to-end (fwd e4m3×e4m3 + both bwd grad GEMMs e5m2×e4m3 all OK). Lower
+    accuracy (one scale/tensor) → **comparison-only on this box, NOT a shipped model**.
+  - `run.sh` auto-picks scaling by arch (rowwise on 9.*/10.*, tensorwise on 12.*; explicit `OLMO_FP8` wins,
+    rowwise-on-sm120 hard-errors). `e5m2×e5m2` probe FAILs are a red herring (never occurs in training).
+  - ⚠ torchao 0.15.0 vs torch 2.10 → cpp extensions skipped (FP8 scaling falls back to ATen). Benign for
+    BF16; for real FP8 perf on Hopper, bump torchao to a torch-2.10 build (image change) + validate.
 - **Parallelism (VERIFIED):** OLMo-core flattens `cp` into the FSDP shard mesh
   (`get_dp_model_mesh` → `dp_cp = dp_shard × cp`). So params shard across **all** GPUs regardless of cp.
   On 4 GPUs at cp=4: ~28 GB/GPU params/optim + 16384-tok activations/rank → **65536 FITS on 4× RTX 6000**.
