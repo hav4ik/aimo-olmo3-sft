@@ -41,6 +41,9 @@ bit-for-bit EXCEPT the fused-linear CE default — DIFF #5; set OLMO_FUSED_LCE=0
      (reference 1000 / 500); OLMO_KEEP_LAST_CKPTS caps PERSISTENT checkpoints on disk via the
      KeepLastNCheckpoints callback (olmo-core only auto-prunes ephemeral). run.sh sets a per-size
      default; 0 = keep all. Does not change training, only IO/disk.
+ 10. OLMO_OPTIM_DTYPE=bf16 (opt-in, skip_step path only): bf16 Adam moment states -> half the optimizer
+     VRAM + checkpoint, fp32 master kept (no stochastic rounding needed; olmo-core has none). Validate
+     loss parity (bf16 2nd moment). Off by default.
 
 NOTHING ELSE DEVIATES — optimizer (SkipStepAdamW), hsdp, selective AC (feed_forward),
 compile_model=True, generate_doc_lengths=True, YaRN are all EXACTLY upstream.
@@ -542,13 +545,21 @@ class SFTConfig(Config):
         # skip metric flags). OLMO_OPTIM default = skip_step, so a no-env run stays AI2-bit-for-bit;
         # olmocore/run.sh wires bf16 -> fused_adamw and fp8 -> skip_step.  weight_decay=0.0 here is
         # the SFT recipe (different from pretraining).
+        # DIFF #10: OLMO_OPTIM_DTYPE=bf16 stores the Adam MOMENTS (exp_avg/exp_avg_sq) in bf16 instead
+        # of fp32 — halves optimizer VRAM + checkpoint (~58 GB vs ~88 GB for 7B) while KEEPING the fp32
+        # master weights (so no update swamping, no stochastic rounding needed; olmo-core has no SR).
+        # Only the skip_step optimizer exposes a state dtype (the fp8 path uses skip_step). The bf16
+        # 2nd moment loses precision in the Adam denominator — VALIDATE loss parity vs fp32. Default off.
+        _opt_dt = DType.bfloat16 if os.environ.get("OLMO_OPTIM_DTYPE") in ("bf16", "bfloat16") else None
         if os.environ.get("OLMO_OPTIM", "skip_step") == "fused_adamw":
+            if _opt_dt is not None:
+                log.warning("OLMO_OPTIM_DTYPE applies only to the skip_step optimizer; fused AdamW keeps fp32 state")
             optim_config = AdamWConfig(
                 lr=8e-05, weight_decay=0.0, betas=(0.9, 0.95), fused=True
             )
         else:
             optim_config = SkipStepAdamWConfig(
-                lr=8e-05, weight_decay=0.0, betas=(0.9, 0.95), compile=False
+                lr=8e-05, weight_decay=0.0, betas=(0.9, 0.95), compile=False, dtype=_opt_dt
             )
 
         # Checkpoint cadence + retention (env-tunable). Persistent every OLMO_SAVE_INTERVAL steps,
