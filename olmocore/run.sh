@@ -81,24 +81,28 @@ fi
 
 PRECISION="${PRECISION:-bf16}"
 CC="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1)"
-# FP8 GEMM (torch._scaled_mm via cuBLASLt) is implemented for Hopper (sm_90) and datacenter Blackwell
-# (sm_100). On sm_120 (RTX PRO 6000 workstation Blackwell) cuBLASLt has no FP8 algorithm and the first
-# step dies with CUBLAS_STATUS_NOT_SUPPORTED in _scaled_mm. Refuse early with a clear message instead
-# of crashing after convert+load+compile. FP8 is intended for the H200 runs anyway. Override: OLMO_FORCE_FP8=1.
-if [ "$PRECISION" = "fp8" ] && [ -z "${OLMO_FORCE_FP8:-}" ]; then
+# FP8 scaling is arch-dependent (torch._scaled_mm via cuBLASLt; verified by tools/fp8_probe.py):
+#   - sm_90 (Hopper) / sm_100 (DC Blackwell): ROWWISE works (accurate; per-row scale, DeepSeek recipe).
+#   - sm_120 (RTX PRO 6000 workstation Blackwell): rowwise -> CUBLAS_STATUS_NOT_SUPPORTED, but
+#     TENSORWISE works. Lower accuracy (one scale/tensor) — fine for a throughput A/B, NOT a shipped
+#     model (do production FP8 on H200 with rowwise). Pick the default scaling by arch; explicit wins.
+if [ "$PRECISION" = "fp8" ]; then
     case "$CC" in
-        9.*|10.*) : ;;   # Hopper / datacenter Blackwell: FP8 scaled-mm supported
-        *) echo "ERROR: PRECISION=fp8 unsupported on this GPU (compute cap $CC)."
-           echo "       FP8 _scaled_mm needs sm_90 (Hopper) or sm_100 (B200); sm_120 (RTX PRO 6000) fails"
-           echo "       with CUBLAS_STATUS_NOT_SUPPORTED. Use PRECISION=bf16 here; FP8 is for the H200 runs."
-           echo "       (Set OLMO_FORCE_FP8=1 to attempt it anyway.)"
-           exit 2 ;;
+        9.*|10.*) export OLMO_FP8="${OLMO_FP8:-rowwise}" ;;
+        12.*)     export OLMO_FP8="${OLMO_FP8:-tensorwise}"
+                  [ "$OLMO_FP8" = "rowwise" ] && { echo "ERROR: OLMO_FP8=rowwise unsupported on sm_120 (cuBLAS NOT_SUPPORTED); use tensorwise."; exit 2; }
+                  echo "[olmocore] FP8 sm_120: tensorwise scaling (lower-accuracy, comparison-only; ship FP8 on H200/rowwise)" ;;
+        *)        if [ -z "${OLMO_FORCE_FP8:-}" ]; then
+                      echo "ERROR: PRECISION=fp8 on unrecognized GPU (cc $CC). FP8 verified on sm_90/sm_100 (rowwise)"
+                      echo "       and sm_120 (tensorwise). Use bf16, or set OLMO_FP8=<tensorwise|rowwise> + OLMO_FORCE_FP8=1."
+                      exit 2
+                  fi
+                  export OLMO_FP8="${OLMO_FP8:-tensorwise}" ;;
     esac
 fi
 case "$CC" in 9.*) DEFATTN=flash_3 ;; *) DEFATTN=flash_2 ;; esac
 export OLMO_ATTN_BACKEND="${OLMO_ATTN_BACKEND:-$DEFATTN}"
-export OLMO_SFT_SAVE_ROOT="$DATA/checkpoints"
-[ "$PRECISION" = "fp8" ] && export OLMO_FP8="${OLMO_FP8:-rowwise}"   # rowwise + all-attn BF16 (DeepSeek)
+export OLMO_SFT_SAVE_ROOT="$DATA/checkpoints"   # OLMO_FP8 already set arch-aware above (all-attn stays BF16)
 
 # Optimizer per precision: fused AdamW for the stable BF16 baseline (single fused CUDA kernel =
 # faster), SkipStepAdamW for FP8 (spike protection + the trainer's `optim/step skipped` metric,

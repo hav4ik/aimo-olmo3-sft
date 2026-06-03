@@ -17,14 +17,14 @@ assert torch.cuda.is_available(), "no CUDA device"
 cc = torch.cuda.get_device_capability()
 print(f"torch {torch.__version__} | {torch.cuda.get_device_name()} | sm_{cc[0]}{cc[1]} | "
       f"cuda {torch.version.cuda}")
-print(f"{'fp8':9} {'scale':11} {'fast_accum':10} {'M,N,K':17} result")
+print(f"{'gemm (a@b)':12} {'scale':11} {'fast_accum':10} {'M,N,K':17} result")
 print("-" * 78)
 
 
-def probe(M, N, K, scale, fast_accum, fp8):
+def probe(M, N, K, scale, fast_accum, fp8_a, fp8_b):
     # a: (M,K) row-major fp8 ; b: (K,N) COLUMN-major fp8 (what _scaled_mm wants)
-    a = torch.randn(M, K, device=dev, dtype=torch.bfloat16).to(fp8)
-    b = torch.randn(N, K, device=dev, dtype=torch.bfloat16).to(fp8).t()
+    a = torch.randn(M, K, device=dev, dtype=torch.bfloat16).to(fp8_a)
+    b = torch.randn(N, K, device=dev, dtype=torch.bfloat16).to(fp8_b).t()
     if scale == "tensorwise":
         sa = torch.ones((1, 1), device=dev, dtype=torch.float32)
         sb = torch.ones((1, 1), device=dev, dtype=torch.float32)
@@ -40,16 +40,22 @@ def probe(M, N, K, scale, fast_accum, fp8):
         return "FAIL: " + str(e).splitlines()[0][:60]
 
 
-# e4m3 is the forward-GEMM input dtype the recipes use; (16384,4096,4096) is the shape
-# from the crash, (4096,)^3 a cheap sanity size.
-for fp8 in (torch.float8_e4m3fn, torch.float8_e5m2):
-    for scale in ("tensorwise", "rowwise"):
-        for fast_accum in (True, False):
-            for (M, N, K) in ((4096, 4096, 4096), (16384, 4096, 4096)):
-                r = probe(M, N, K, scale, fast_accum, fp8)
-                tag = str(fp8).replace("torch.float8_", "")
-                print(f"{tag:9} {scale:11} {str(fast_accum):10} {f'{M},{N},{K}':17} {r}")
+E4, E5 = torch.float8_e4m3fn, torch.float8_e5m2
+# The THREE GEMMs an FP8 linear actually runs each step (this is what training really does — note
+# the backward grad GEMMs are MIXED e5m2 x e4m3, NOT e5m2 x e5m2). If all three are OK for a given
+# scaling mode, that recipe trains end-to-end here. (16384,4096,4096) is the shape from the crash.
+GEMMS = [
+    ("fwd  x@w   ", E4, E4),   # forward:     x(e4m3)        @ w(e4m3)
+    ("bwd dX  go@w", E5, E4),   # grad_input:  grad_out(e5m2) @ w(e4m3)
+    ("bwd dW  x@go", E4, E5),   # grad_weight: x(e4m3)        @ grad_out(e5m2)
+]
+for scale in ("tensorwise", "rowwise"):
+    for fast_accum in (True, False):
+        for (M, N, K) in ((4096, 4096, 4096), (16384, 4096, 4096)):
+            for (label, fa_, fb_) in GEMMS:
+                r = probe(M, N, K, scale, fast_accum, fa_, fb_)
+                print(f"{label:12} {scale:11} {str(fast_accum):10} {f'{M},{N},{K}':17} {r}")
 
 print("-" * 78)
-print("Any OK row => that scaling mode works here. tensorwise OK but rowwise FAIL =>")
-print("try training with: OLMO_FORCE_FP8=1 OLMO_FP8=tensorwise PRECISION=fp8")
+print("A recipe trains here only if ALL THREE GEMMs (fwd + the two bwd) are OK for it.")
+print("tensorwise all-OK => OLMO_FP8=tensorwise PRECISION=fp8 (run.sh auto-picks it on sm_120).")
