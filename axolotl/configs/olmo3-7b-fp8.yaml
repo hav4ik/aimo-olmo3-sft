@@ -28,11 +28,14 @@ plugins:
 
 # Model's own think-aware template (see olmo3-7b-bf16.yaml); transformers loads chat_template.jinja.
 chat_template: tokenizer_default
-# Local parquet from data_prep/prepare.sh; axolotl/run.sh substitutes the real path (DATASET_NAME).
+# PRE-TOKENIZED parquet (input_ids / labels[-100 prompt-masked] / attention_mask) — the SAME dolma2
+# tokens as the olmo-core run, so axolotl-vs-olmo-core is apples-to-apples. axolotl auto-detects
+# already-tokenized data (these 3 columns) and SKIPS online tokenization. run.sh fills in path +
+# data_files (HF repo subfolder axolotl/sft_tokenized.parquet, or a local parquet file/dir).
 datasets:
   - path: __DATASET__
-    type: chat_template
-    field_messages: messages
+    ds_type: parquet
+    data_files: __DATA_FILES__
 dataset_prepared_path: /data/last_run_prepared
 val_set_size: 0.0
 

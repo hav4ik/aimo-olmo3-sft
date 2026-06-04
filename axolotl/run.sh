@@ -1,11 +1,12 @@
 #!/bin/bash
-# In-container Axolotl SFT run. Loads + tokenizes the dataset ONLINE from HF (DATASET_HF, set by
-# EXPERIMENT) — the axolotl messages parquet is large (~120 GB) so we don't pre-stage it; axolotl
-# downloads the dataset and tokenizes at launch (cached under /data/training/last_run_prepared).
-# The base model downloads from HF (HF_TOKEN). attn auto by GPU arch: sm_90 (H100/H200) ->
-# flash_attention_3; else (sm_120 RTX PRO 6000 / Blackwell) -> flex_attention. Ckpts under /data/training.
+# In-container Axolotl SFT run. Loads a PRE-TOKENIZED parquet (input_ids/labels/attention_mask) from
+# HF (DATASET_HF, set by EXPERIMENT) — the SAME dolma2 tokens as the olmo-core run, so the two engines
+# are apples-to-apples. axolotl auto-detects already-tokenized data and SKIPS online tokenization (only
+# the multipack packing prep runs, cached under /data/training/last_run_prepared). The base model
+# downloads from HF (HF_TOKEN). attn auto by GPU arch: sm_90 (H100/H200) -> flash_attention_3; else
+# (sm_120 RTX PRO 6000 / Blackwell) -> flex_attention. Ckpts under /data/training.
 #   MODEL_SIZE=7b|32b + PRECISION=bf16|fp8 -> configs/olmo3-<size>-<precision>.yaml ; DATASET_NAME = data.
-#   Single-GPU smoke: SEQUENCE_LEN=2048 MAX_STEPS=10 (full recipe = seq 32768 / 2 epochs).
+#   Single-GPU smoke: SEQUENCE_LEN=2048 MAX_STEPS=10 (full recipe = seq 65536 / 2 epochs).
 set -euo pipefail
 [ -f /workspace/axolotl-venv/bin/activate ] && source /workspace/axolotl-venv/bin/activate
 DATA=/data/training
@@ -14,11 +15,18 @@ PRECISION="${PRECISION:-bf16}"
 MODEL_SIZE="${MODEL_SIZE:-7b}"   # 7b | 32b (32b = the axolotl fallback path for the big tier)
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # works whether code is cloned or baked
 CONFIG="${CONFIG:-$HERE/configs/olmo3-${MODEL_SIZE}-${PRECISION}.yaml}"
-# Dataset source axolotl loads + tokenizes online. DATASET_HF (HF dataset id, set by EXPERIMENT) by
-# default; override with DATASET_SRC (any HF id / local path axolotl can load — e.g. a tiny set +
-# MAX_STEPS for a smoke, to avoid pulling the full dataset).
+# Dataset = a PRE-TOKENIZED parquet. DATASET_SRC defaults to the HF dataset repo (DATASET_HF, set by
+# EXPERIMENT) and DATASET_FILE to the parquet inside it (axolotl/sft_tokenized.parquet). HF load_dataset
+# infers parquet from the .parquet extension and pulls ONLY that file (not the olmocore .npy). Override
+# DATASET_SRC with a local .parquet (data_files=null) or a local dir holding DATASET_FILE to use a
+# pre-staged copy; point DATASET_SRC at any other HF id for a smoke set.
 DATASET_SRC="${DATASET_SRC:-${DATASET_HF:-}}"
-[ -n "$DATASET_SRC" ] || { echo "ERROR: no dataset — set EXPERIMENT, or DATASET_HF / DATASET_SRC=<hf-dataset-id>"; exit 3; }
+[ -n "$DATASET_SRC" ] || { echo "ERROR: no dataset — set EXPERIMENT, or DATASET_HF / DATASET_SRC=<hf-dataset-id|local.parquet>"; exit 3; }
+DATASET_FILE="${DATASET_FILE:-axolotl/sft_tokenized.parquet}"   # parquet within the HF repo / local dir
+case "$DATASET_SRC" in
+    *.parquet) DATASET_PATH="$DATASET_SRC"; DATA_FILES="null" ;;          # explicit parquet file -> path IS the file
+    *)         DATASET_PATH="$DATASET_SRC"; DATA_FILES="$DATASET_FILE" ;; # HF repo (or local dir) + the parquet inside it
+esac
 
 CC="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1)"
 case "$CC" in 9.*) DEFATTN=flash_attention_3 ;; *) DEFATTN=flex_attention ;; esac
@@ -30,9 +38,9 @@ ATTN="${ATTN_IMPL:-$DEFATTN}"
 CP_SIZE="${CONTEXT_PARALLEL_SIZE:-1}"
 [ "$CP_SIZE" -gt 1 ] && ATTN=flash_attention_2
 
-# materialize the config with the dataset source substituted in
+# materialize the config with the dataset path + data_files substituted in
 CFG=/tmp/axolotl-config.yaml
-sed "s|__DATASET__|$DATASET_SRC|g" "$CONFIG" > "$CFG"
+sed -e "s|__DATASET__|$DATASET_PATH|g" -e "s|__DATA_FILES__|$DATA_FILES|g" "$CONFIG" > "$CFG"
 
 OVERRIDES=(
     "--attn_implementation=$ATTN"
@@ -64,5 +72,5 @@ else
     LAUNCH=(--num_processes="$NPROC")
 fi
 unset RANK WORLD_SIZE GLOBAL_RANK LOCAL_RANK 2>/dev/null || true
-echo "[axolotl] $PRECISION | ${NNODES}x${NPROC} GPU cc=$CC | attn=$ATTN | node ${NODE_RANK}/${NNODES} | config=$(basename "$CONFIG")"
+echo "[axolotl] $PRECISION | ${NNODES}x${NPROC} GPU cc=$CC | attn=$ATTN | node ${NODE_RANK}/${NNODES} | config=$(basename "$CONFIG") | data=$DATASET_PATH${DATA_FILES:+ ($DATA_FILES)} [pretokenized]"
 exec accelerate launch "${LAUNCH[@]}" -m axolotl.cli.train "$CFG" "${OVERRIDES[@]}"
