@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
 import logging
 import os
 import re
@@ -323,6 +324,22 @@ def find_final_checkpoint(save_root: Path, run_name_full: str) -> Path:
     raise FileNotFoundError(f"no step* checkpoint under {save_root} (training may have failed to save)")
 
 
+def legacy_rope_config(config_path: Path) -> None:
+    """transformers 5.x serializes RoPE as a single `rope_parameters` field; mirror it back to the
+    legacy `rope_scaling` + top-level `rope_theta` (the format the base model + transformers 4.57 /
+    vLLM / sglang read) so the exported model loads correctly regardless of the inference stack."""
+    try:
+        cfg = json.loads(config_path.read_text())
+        rp = cfg.pop("rope_parameters", None)
+        if rp and not cfg.get("rope_scaling"):
+            cfg["rope_theta"] = rp.get("rope_theta", cfg.get("rope_theta", 500000))
+            cfg["rope_scaling"] = {k: v for k, v in rp.items() if k != "rope_theta"}
+            config_path.write_text(json.dumps(cfg, indent=2))
+            log.info("config: mirrored rope_parameters -> rope_scaling + rope_theta (transformers 4.x/vLLM compat)")
+    except Exception as exc:  # noqa: BLE001 — config tweak must not fail the export
+        log.warning("could not normalize rope config (%s); leaving as-is", exc)
+
+
 def export_hf(checkpoint: Path, out_dir: Path, seq_len: int) -> None:
     """Convert the trained OLMo-core distcp checkpoint to a HuggingFace safetensors model."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -330,6 +347,7 @@ def export_hf(checkpoint: Path, out_dir: Path, seq_len: int) -> None:
          "-i", str(checkpoint), "-o", str(out_dir),
          "-s", str(seq_len), "-t", TOKENIZER,
          "--dtype", "bfloat16", "--skip-validation"])
+    legacy_rope_config(out_dir / "config.json")
     log.info("exported HF model -> %s", out_dir)
 
 
