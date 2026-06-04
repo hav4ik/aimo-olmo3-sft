@@ -138,7 +138,11 @@ DEFAULT_NUM_NODES = 1
 # DIFF #2: upstream hardcodes 8; take it from torchrun (LOCAL_WORLD_SIZE = nproc
 # per node) so the 1/2/8/16-GPU shapes compute the right world_size/shard_degree.
 GPUS_PER_NODE = int(os.environ.get("LOCAL_WORLD_SIZE", "8"))
-MAX_RANK_MICROBATCH_SIZE_TOKENS = 16_384  # max tokens this config can handle on an H100
+# Per-rank token budget that drives cp_degree (cp = smallest pow2 with seq_len/cp <= this). AI2's value:
+# 16384 = "max this config handles on an H100" (80 GB); the code below doubles it for B200. It's an
+# empirical tuning heuristic, NOT a hard limit — H200 (141 GB) comfortably handles 32768. Override with
+# OLMO_MAX_TOKENS_PER_RANK to halve CP (e.g. cp 4->2 at seq 65536): 2x tokens/GPU + 2x data-parallel.
+MAX_RANK_MICROBATCH_SIZE_TOKENS = int(os.environ.get("OLMO_MAX_TOKENS_PER_RANK", "16384"))
 
 
 @dataclass

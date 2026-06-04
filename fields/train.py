@@ -80,9 +80,10 @@ RECIPES: dict[str, Recipe] = {
     # 32B recipes are added once the 7B submission passes (lr 1e-4, GBS 4,194,304).
 }
 
-# Mirrors olmo-core's MAX_RANK_MICROBATCH_SIZE_TOKENS (the SFT script). cp_degree is auto-derived from
-# seq_len against this cap: H100/H200 = 16384 (cluster local_h100). B200 doubles it — not our target.
-MAX_TOKENS_PER_RANK = 16384
+# Mirrors olmo-core's MAX_RANK_MICROBATCH_SIZE_TOKENS (the SFT script) so cp_degree logging/validation
+# agree. AI2's 16384 = an H100 heuristic, not a hard limit; override with OLMO_MAX_TOKENS_PER_RANK
+# (H200's 141 GB handles 32768 -> cp 4->2 at seq 65536, more tokens/GPU + more data-parallelism).
+MAX_TOKENS_PER_RANK = int(os.environ.get("OLMO_MAX_TOKENS_PER_RANK", "16384"))
 
 log = logging.getLogger("fields.train")
 
