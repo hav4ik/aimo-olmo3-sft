@@ -104,6 +104,13 @@ if [ "$PRECISION" = "fp8" ]; then
     esac
 fi
 case "$CC" in 9.*) DEFATTN=flash_3 ;; *) DEFATTN=flash_2 ;; esac
+# Ring context parallelism (our default, auto-engaged once seq_len exceeds the ~16384-tok/rank cap) is
+# implemented ONLY on the FA2 backend — FlashAttention3 raises "doesn't support ring context
+# parallelism". So when CP will engage with ring, force FA2 even on sm_90/H200 (FA3's Hopper speedup is
+# moot once CP is required). FA3 stays the default only for short-context (no-CP) runs, e.g. smokes.
+if [ "${SEQ_LEN:-65536}" -gt 16384 ] && [ "${OLMO_CP_STYLE:-ring}" = "ring" ]; then
+    DEFATTN=flash_2
+fi
 export OLMO_ATTN_BACKEND="${OLMO_ATTN_BACKEND:-$DEFATTN}"
 export OLMO_SFT_SAVE_ROOT="${OLMO_SFT_SAVE_ROOT:-$DATA/checkpoints}"   # overridable: Fields train.py -> --output (OLMO_FP8 set arch-aware above; all-attn stays BF16)
 # Shared filesystem across nodes (the default; our pipeline already assumes it — rank-0 stages on the
