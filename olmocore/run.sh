@@ -28,7 +28,7 @@ if ! ldconfig -p 2>/dev/null | grep -q 'libnvrtc\.so'; then
     fi
 fi
 
-DATA=/data/training
+DATA="${DATA:-/data/training}"   # overridable: Fields train.py points this at --workdir (downloads/scratch)
 NPROC="${NPROC_PER_NODE:-$(nvidia-smi -L | wc -l)}"
 # Model + recipe by size (the EXPERIMENT/MODEL_SIZE front-end sets MODEL_SIZE; explicit env wins).
 MODEL_SIZE="${MODEL_SIZE:-7b}"
@@ -105,7 +105,7 @@ if [ "$PRECISION" = "fp8" ]; then
 fi
 case "$CC" in 9.*) DEFATTN=flash_3 ;; *) DEFATTN=flash_2 ;; esac
 export OLMO_ATTN_BACKEND="${OLMO_ATTN_BACKEND:-$DEFATTN}"
-export OLMO_SFT_SAVE_ROOT="$DATA/checkpoints"   # OLMO_FP8 already set arch-aware above (all-attn stays BF16)
+export OLMO_SFT_SAVE_ROOT="${OLMO_SFT_SAVE_ROOT:-$DATA/checkpoints}"   # overridable: Fields train.py -> --output (OLMO_FP8 set arch-aware above; all-attn stays BF16)
 
 # Optimizer per precision: fused AdamW for the stable BF16 baseline (single fused CUDA kernel =
 # faster), SkipStepAdamW for FP8 (spike protection + the trainer's `optim/step skipped` metric,
