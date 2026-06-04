@@ -114,8 +114,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     # The two roots the user asked for.
     p.add_argument("--workdir", default=os.environ.get("FIELDS_WORKDIR", "/tmp/fields-olmo-sft"),
                    help="Scratch root: base model, tokenized dataset and code are downloaded here.")
-    p.add_argument("--output", default=os.environ.get("FIELDS_OUTPUT", "./output"),
-                   help="Deliverable root: logs, training checkpoints and the exported HF model.")
+    p.add_argument("--output", default=os.environ.get("FIELDS_OUTPUT", "/data/training/output"),
+                   help="Deliverable root: logs + training checkpoints (upload.py converts + ships from here).")
 
     # Fields-standard paths (optional — override the corresponding download when a local path is given).
     p.add_argument("--model_path", default="",
