@@ -194,6 +194,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--code_repo", default=DEFAULT_CODE_REPO, help="Code repo to clone (empty => use baked /app/code).")
     p.add_argument("--code_ref", default=DEFAULT_CODE_REF, help="Code branch/tag/commit.")
     p.add_argument("--skip_export", action="store_true", help="Train only; do not export the HF model.")
+    p.add_argument("--shard-size", "--shard_size", dest="shard_size", default="5GB",
+                   help="Shard the exported safetensors at this size (HF >5GB convention; e.g. 5GB, 4GiB). '0'/'none' = single file.")
     return p.parse_args(argv)
 
 
@@ -341,7 +343,65 @@ def legacy_rope_config(config_path: Path) -> None:
         log.warning("could not normalize rope config (%s); leaving as-is", exc)
 
 
-def export_hf(checkpoint: Path, out_dir: Path, seq_len: int) -> None:
+def parse_size(s: str) -> int:
+    """Parse a shard size like '5GB' / '4GiB' / '0' into bytes (0 => disabled). GB=10^9, GiB=2^30."""
+    s = (s or "").strip().upper()
+    if s in ("", "0", "NONE", "OFF"):
+        return 0
+    for suf, mult in (("GIB", 2**30), ("MIB", 2**20), ("GB", 10**9), ("MB", 10**6), ("B", 1)):
+        if s.endswith(suf):
+            return int(float(s[: -len(suf)]) * mult)
+    return int(s)
+
+
+def shard_safetensors(out_dir: Path, max_shard_bytes: int) -> None:
+    """Re-split a single model.safetensors into HF-style shards (model-0000i-of-0000N.safetensors +
+    model.safetensors.index.json) — the HF convention for >5 GB models. Touches ONLY the weights;
+    config / generation_config / tokenizer are left exactly as the converter wrote them. Low memory:
+    tensor sizes come from the header (no load), and only one shard is materialized at a time."""
+    try:
+        import struct
+        from safetensors import safe_open
+        from safetensors.torch import save_file
+
+        single = out_dir / "model.safetensors"
+        if not single.is_file():
+            return  # already sharded / nothing to do
+        with open(single, "rb") as fh:
+            header = json.loads(fh.read(struct.unpack("<Q", fh.read(8))[0]))
+        sizes = {k: v["data_offsets"][1] - v["data_offsets"][0]
+                 for k, v in header.items() if k != "__metadata__"}
+        shards: list[list[str]] = []
+        cur: list[str] = []
+        cur_sz = 0
+        for name, sz in sizes.items():  # greedy pack in file order
+            if cur and cur_sz + sz > max_shard_bytes:
+                shards.append(cur)
+                cur, cur_sz = [], 0
+            cur.append(name)
+            cur_sz += sz
+        if cur:
+            shards.append(cur)
+        if len(shards) <= 1:
+            log.info("export fits in one shard (<= %d B); leaving single file", max_shard_bytes)
+            return
+        n = len(shards)
+        weight_map: dict[str, str] = {}
+        with safe_open(str(single), framework="pt") as f:
+            for i, names in enumerate(shards, start=1):
+                fname = f"model-{i:05d}-of-{n:05d}.safetensors"
+                save_file({name: f.get_tensor(name) for name in names},
+                          str(out_dir / fname), metadata={"format": "pt"})
+                weight_map.update({name: fname for name in names})
+        index = {"metadata": {"total_size": sum(sizes.values())}, "weight_map": weight_map}
+        (out_dir / "model.safetensors.index.json").write_text(json.dumps(index, indent=2))
+        single.unlink()
+        log.info("sharded model.safetensors -> %d shards (<=%d B each)", n, max_shard_bytes)
+    except Exception as exc:  # noqa: BLE001 — sharding must not fail the export
+        log.warning("could not shard safetensors (%s); leaving single file", exc)
+
+
+def export_hf(checkpoint: Path, out_dir: Path, seq_len: int, shard_bytes: int = 0) -> None:
     """Convert the trained OLMo-core distcp checkpoint to a HuggingFace safetensors model."""
     out_dir.mkdir(parents=True, exist_ok=True)
     run([sys.executable, str(CONVERT_TO_HF),
@@ -349,6 +409,8 @@ def export_hf(checkpoint: Path, out_dir: Path, seq_len: int) -> None:
          "-s", str(seq_len), "-t", TOKENIZER,
          "--dtype", "bfloat16", "--skip-validation"])
     legacy_rope_config(out_dir / "config.json")
+    if shard_bytes:
+        shard_safetensors(out_dir, shard_bytes)
     log.info("exported HF model -> %s", out_dir)
 
 
@@ -574,7 +636,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     checkpoint = find_final_checkpoint(save_root, final_name)
     log.info("final checkpoint: %s", checkpoint)
-    export_hf(checkpoint, hf_out, seq_len)
+    export_hf(checkpoint, hf_out, seq_len, parse_size(args.shard_size))
 
     # Manifest so the deliverable is self-describing.
     (output / "MANIFEST.txt").write_text(
