@@ -28,39 +28,6 @@ else
     echo "[bootstrap] WARN: $LOG_DIR not writable; console-only logging"
 fi
 
-# Early W&B log streaming (preflight visibility): get clone/convert/download/CP-init failures onto
-# W&B BEFORE training's own run exists. A background helper opens a "<group>-preflight" run in the
-# same project+group and live-syncs $LOG_FILE; it self-finishes when bootstrap's exec'd process tree
-# exits (survives the final `exec` by watching its parent pid). Rank 0 only; needs WANDB_API_KEY and
-# an importable wandb (the olmocore conda base has it; silently skipped otherwise, e.g. axolotl venv).
-if [ -n "${WANDB_API_KEY:-}" ]; then
-    export WANDB_RUN_GROUP="${WANDB_RUN_GROUP:-${EXPERIMENT:-olmo3-sft}}"   # also groups the training run
-    export WANDB_DIR="${WANDB_DIR:-/data/training/wandb}"; mkdir -p "$WANDB_DIR" 2>/dev/null || true
-    if [ "$RANK" -eq 0 ] && [ -n "${LOG_FILE:-}" ] && python -c "import wandb" 2>/dev/null; then
-        WANDB_PREFLIGHT_LOG="$LOG_FILE" nohup python - >/dev/null 2>&1 <<'PY' &
-import os, time, wandb
-logf = os.environ["WANDB_PREFLIGHT_LOG"]
-ppid0 = os.getppid()
-run = wandb.init(
-    project=os.environ.get("WANDB_PROJECT", "olmo3-7b-sft"),
-    entity=os.environ.get("WANDB_ENTITY") or None,
-    group=os.environ.get("WANDB_RUN_GROUP"),
-    name=(os.environ.get("WANDB_RUN_GROUP") or "job") + "-preflight",
-    job_type="preflight",
-)
-for _ in range(600):                 # wait for the log file to appear
-    if os.path.exists(logf):
-        break
-    time.sleep(1)
-wandb.save(logf, policy="live")      # live-sync to the run's Files tab as it grows
-while os.getppid() == ppid0:         # stay alive until the exec'd job tree exits
-    time.sleep(15)
-run.finish()
-PY
-        echo "[bootstrap] streaming $LOG_FILE -> W&B (${WANDB_RUN_GROUP}-preflight)"
-    fi
-fi
-
 if [ "$RANK" -eq 0 ]; then
     rm -f "$READY"; mkdir -p "$DEST"
     if [ -d "$DEST/.git" ]; then
