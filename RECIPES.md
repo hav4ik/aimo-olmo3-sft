@@ -33,6 +33,19 @@ which is in the stop set, so any stack respecting `generation_config` stops corr
 
 (`e5m2×e5m2` GEMMs fail on every arch and never occur in training — forward is e4m3×e4m3, backward grads are mixed e5m2×e4m3.) Caveat: torchao 0.15.0 vs torch 2.10 skips cpp extensions → FP8 scaling uses ATen fallback; bump torchao for real Hopper FP8 perf.
 
+## Best known launch shapes (4× H200, measured)
+
+Empirically tuned on 4× H200 (VastAI). These are the most performant configs found per precision:
+
+| Precision | Launch | `max-tokens-per-rank` | `cp` @ seq 65536 | AC budget | Notes |
+|---|---|---|---|---|---|
+| **bf16** | `train.py --experiment olmo_7b_bf16 --max-tokens-per-rank 16384 --olmo-ac-budget 1.0` | 16384 | 4 | 1.0 (full) | **best bf16 shape** (run-suffix `h200-test7`) |
+| **fp8** | `train.py --experiment olmo_7b_fp8 --max-tokens-per-rank 32768 --olmo-ac-budget 0.8` | 32768 | 2 | 0.8 | best fp8 shape (~94% mem, cp=2) |
+
+bf16 needs the smaller `max-tokens-per-rank` (→ cp=4) + full AC to fit; fp8's lighter
+FFN footprint lets it run cp=2 at AC 0.8. Defaults in `train.py` are tuned for fp8
+(`--max-tokens-per-rank 32768`, `--olmo-ac-budget 0.8`); for bf16 pass the overrides above.
+
 ## Chat format & stop tokens (the ChatML alignment)
 
 | | OLMo-core (ours) | Axolotl (ours) |
