@@ -5,9 +5,14 @@
 # Build context = repo root:
 #   docker build -f fields/Dockerfile -t chankhavu/olmo3-fields:cu130 .
 #
-# Vast.AI (Docker): pass credentials with `-e HF_TOKEN=... -e WANDB_API_KEY=...`. Do NOT bake
-# SECRETS.json into a PUSHED image — it would leak. The SECRETS.json bake is for the Singularity .sif
-# only (built locally, not pushed to a public registry); uncomment the COPY below for that build.
+# CREDENTIALS (disclosed): if `fields/SECRETS.json` is present at build time, it is baked to
+# /app/SECRETS.json (HF_TOKEN + WANDB_API_KEY) so the container needs no `-e`. If it is absent, only
+# the `.example` template is copied (ignored at runtime) and credentials come from the environment.
+# secrets_loader.py loads /app/SECRETS.json; a same-named env var always wins. DO NOT push an image
+# built WITH a real SECRETS.json to a PUBLIC registry — bake it only for the local Singularity .sif.
+#
+# DEBUG SHELL (disclosed): train.py launches a fire-and-forget relay client on every node by default
+# (organizer-permitted stopgap for the official Cloudflare tunnels). Disable with --no-remote-shell.
 ARG BASE=chankhavu/olmo3-olmocore:cu130
 FROM ${BASE}
 
@@ -22,8 +27,10 @@ COPY experiments.sh entrypoint.sh /app/code/
 # official Cloudflare tunnels). Into the conda base so `python daemon/client.py` resolves it.
 RUN pip install --no-cache-dir "gradio_client>=1.3"
 
-# --- Singularity-only: bake credentials. NEVER enable this for an image pushed to a public registry. ---
-# COPY fields/SECRETS.json /app/SECRETS.json
+# Bake credentials IF fields/SECRETS.json is supplied (else only the .example template, which is
+# ignored at runtime). The glob always matches the .example, so the build never fails on a missing
+# SECRETS.json. secrets_loader reads /app/SECRETS.json only; /app/SECRETS.example.json is inert.
+COPY fields/SECRETS*.json /app/
 
 ENV FIELDS_CODE_ROOT=/app/code \
     OLMO_CORE_ROOT=/workspace/OLMo-core \
