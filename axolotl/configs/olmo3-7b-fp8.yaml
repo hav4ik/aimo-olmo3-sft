@@ -3,12 +3,12 @@
 # RECIPE-LEVEL params match OLMo-core exactly: seq 65536, LR 5e-5, betas (0.9,0.95), wd 0, grad-norm 1.0,
 # linear warmup 0.03 -> 0, 2 epochs, fused AdamW. Tune grad_accum so GBS ~= 1,048,576 tok (see note below).
 #
-# FP8 INTERNALS axolotl CANNOT match — it exposes only `fp8` + `fp8_enable_fsdp_float8_all_gather` and
-# routes through accelerate's torchao integration, so these OLMo-core FP8 choices are NOT reachable here:
-#   - SCALING: axolotl = TENSORWISE e4m3 only. OLMo-core now defaults ROWWISE on H200 (sm_90) / tensorwise
-#     on sm_120. => this arm matches OLMo-core's *tensorwise* path (OLMO_FP8=tensorwise / the RTX-6000
-#     config), NOT the H200 ROWWISE production recipe. For an apples-to-apples A/B, run OLMo-core with
-#     OLMO_FP8=tensorwise; do NOT compare this against rowwise.
+# This is axolotl's BEST-EFFORT FP8 — we do NOT cripple it to match OLMo-core. axolotl exposes only `fp8`
+# + `fp8_enable_fsdp_float8_all_gather` (accelerate's torchao integration), so its recipe necessarily
+# DIFFERS from OLMo-core's; that difference is part of what the A/B measures, not a confound to neutralize:
+#   - SCALING: axolotl = TENSORWISE e4m3 only. OLMo-core runs its own best: ROWWISE on H200 (sm_90),
+#     tensorwise on sm_120 (rowwise hard-errors there). So on the RTX-6000 box both are tensorwise and
+#     coincide; on H200 axolotl(tensorwise) vs OLMo-core(rowwise) — that's best-vs-best, by design.
 #   - MODULE FILTER: axolotl FP8s ALL linears (accelerate skips lm_head + non-/16 dims). OLMo-core keeps
 #     attention q/k/v/o + lm_head + embeddings in BF16 (DeepSeek recipe) and FP8s only the FFN. So this arm
 #     quantizes MORE of the model — if it's less stable, the un-excluded attention is the likely cause.
