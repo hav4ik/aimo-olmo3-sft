@@ -46,7 +46,7 @@ torch_compile_backend: inductor
 fsdp_version: 2
 fsdp_config:
   offload_params: false
-  cpu_ram_efficient_loading: true
+  cpu_ram_efficient_loading: false   # MUST be false with torchao FP8 (accelerate hard-errors otherwise)
   auto_wrap_policy: TRANSFORMER_BASED_WRAP
   transformer_layer_cls_to_wrap: Olmo3DecoderLayer
   state_dict_type: FULL_STATE_DICT
