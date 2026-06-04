@@ -42,6 +42,12 @@ import time
 from pathlib import Path
 from typing import Optional
 
+try:
+    from secrets_loader import load_secrets  # baked sibling at /app/secrets_loader.py
+except ImportError:  # keep train.py runnable even if the loader is absent
+    def load_secrets(path: Optional[str] = None) -> Optional[str]:
+        return None
+
 # --------------------------------------------------------------------------------------------------
 # Constants
 # --------------------------------------------------------------------------------------------------
@@ -260,6 +266,7 @@ def export_hf(checkpoint: Path, out_dir: Path, seq_len: int) -> None:
 # --------------------------------------------------------------------------------------------------
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
+    load_secrets()  # HF_TOKEN / WANDB_API_KEY from baked SECRETS.json, else env
     recipe = RECIPES[args.experiment]
     seq_len = args.seq_len or recipe.seq_len
 

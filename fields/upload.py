@@ -30,6 +30,12 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+try:
+    from secrets_loader import load_secrets  # baked sibling at /app/secrets_loader.py
+except ImportError:
+    def load_secrets(path: Optional[str] = None) -> Optional[str]:
+        return None
+
 # Bake the presigned PUT URL here (or via FIELDS_S3_URL) so it need not be passed at runtime.
 DEFAULT_S3_URL = os.environ.get("FIELDS_S3_URL", "")
 DEFAULT_SOURCE_DIR = os.environ.get("FIELDS_SOURCE_DIR", str(Path(os.environ.get("FIELDS_OUTPUT", "./output")) / "model"))
@@ -104,6 +110,7 @@ def upload_s3(url: str, source_dir: Path, archive_name: str) -> None:
 
 def main(argv: Optional[list[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    load_secrets()  # HF_TOKEN from baked SECRETS.json, else env
     args = parse_args(argv)
 
     source_dir = Path(args.source_dir).resolve()

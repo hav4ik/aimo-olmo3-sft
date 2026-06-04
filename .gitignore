@@ -1,0 +1,11 @@
+# Real credentials — NEVER commit. Baked into the Singularity image at build time only.
+SECRETS.json
+**/SECRETS.json
+
+# Python
+__pycache__/
+*.pyc
+
+# Local scratch / outputs
+output/
+*.sif
