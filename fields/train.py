@@ -7,18 +7,18 @@ describing orchestrator over our tested ``olmocore/run.sh`` pipeline:
     download (HF base model + tokenized dataset + code)  ->  --workdir
     convert  (HF base -> OLMo-core distcp)               ->  --workdir
     train    (torchrun the Olmo-3 SFT recipe)            ->  --output/<run>/stepN  (distcp)
-    export   (final distcp -> HuggingFace safetensors)   ->  --output/model        (the deliverable)
 
-Nothing is baked into the image except code + dependencies: the heavy artifacts (base weights ~15 GB,
-tokenized data ~15 GB) are pulled at runtime into ``--workdir`` (a scratch / bind-mounted dir), and all
-results (logs + checkpoints + the exported HF model) land under ``--output``.
+Converting the trained distcp checkpoint to a HuggingFace model + shipping it is upload.py's job
+(``python /app/upload.py --output <output>``). Nothing is baked into the image except code + deps: the
+heavy artifacts (base weights ~15 GB, tokenized data ~15 GB) are pulled at runtime into ``--workdir``
+(scratch / bind-mounted), and training checkpoints + logs land under ``--output``.
 
 The whole run is selected by ONE flag: ``--experiment olmo_7b_bf16`` (or ``olmo_7b_fp8``). Every other
 knob is an optional CLI override with a default that reproduces AI2's published Olmo-3 SFT recipe.
 
 Examples::
 
-    # zero-config: download everything, train olmo3-7b bf16, export HF model to ./output/model
+    # zero-config: download everything, train olmo3-7b bf16 (distcp -> ./output); upload.py ships it
     python /app/train.py --experiment olmo_7b_bf16 --workdir /scratch --output /results
 
     # FP8 (rowwise on H200), 8 GPUs, custom LR
@@ -32,11 +32,9 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import json
 import logging
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -52,17 +50,12 @@ except ImportError:  # keep train.py runnable even if the loader is absent
 # --------------------------------------------------------------------------------------------------
 # Constants
 # --------------------------------------------------------------------------------------------------
-# Where the heavy deps + olmo_core source live in the image (built by docker/base/Dockerfile.olmo-core-sft).
-OLMO_CORE_ROOT = Path(os.environ.get("OLMO_CORE_ROOT", "/workspace/OLMo-core"))
-CONVERT_TO_HF = OLMO_CORE_ROOT / "src" / "examples" / "huggingface" / "convert_checkpoint_to_hf.py"
-
 # Baked copy of THIS repo's code (run.sh + sft_scripts), used when --code_repo is empty / clone fails.
 BAKED_CODE_ROOT = Path(os.environ.get("FIELDS_CODE_ROOT", "/app/code"))
 
 # The deterministic identity train.py pins so it can locate the trained checkpoint afterwards.
 RUN_USER = "fields"  # -> save_folder = {OLMO_SFT_SAVE_ROOT}/checkpoints/{RUN_USER}/olmo-sft/{run_name}
 BAKED_HF_HOME = "/data/training/hf_cache"  # base-image default; relocated under --workdir at runtime
-TOKENIZER = "dolma2"
 DEFAULT_DATASET_REPO = "chankhavu/smolmo-proofs-cot-sft"
 DEFAULT_DATASET_SUBDIR = "olmocore"
 DEFAULT_CODE_REPO = "https://github.com/hav4ik/aimo-olmo3-sft"
@@ -193,9 +186,6 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--dataset_subdir", default=DEFAULT_DATASET_SUBDIR, help="Subdir in the dataset repo holding the .npy.")
     p.add_argument("--code_repo", default=DEFAULT_CODE_REPO, help="Code repo to clone (empty => use baked /app/code).")
     p.add_argument("--code_ref", default=DEFAULT_CODE_REF, help="Code branch/tag/commit.")
-    p.add_argument("--skip_export", action="store_true", help="Train only; do not export the HF model.")
-    p.add_argument("--shard-size", "--shard_size", dest="shard_size", default="5GB",
-                   help="Shard the exported safetensors at this size (HF >5GB convention; e.g. 5GB, 4GiB). '0'/'none' = single file.")
     return p.parse_args(argv)
 
 
@@ -303,115 +293,6 @@ def visible_gpus() -> int:
         return 1
 
 
-def _step_num(p: Path) -> int:
-    digits = re.sub(r"\D", "", p.name)
-    return int(digits) if digits else -1
-
-
-def find_final_checkpoint(save_root: Path, run_name_full: str) -> Path:
-    """Return the highest-step checkpoint ROOT to feed convert_to_hf -i.
-
-    Layout (SFT script): {save_root}/checkpoints/{user}/olmo-sft/{run_name}/stepN/ containing
-    config.json (per-checkpoint, from ConfigSaverCallback) AND model_and_optim/ (the distcp shards).
-    convert_to_hf reads <-i>/config.json and appends model_and_optim itself, so -i must be the stepN
-    dir — NOT the model_and_optim subdir. Pick the highest step that has BOTH."""
-    base = save_root / "checkpoints" / RUN_USER / "olmo-sft" / run_name_full
-    steps = sorted(base.glob("step*"), key=_step_num)
-    if not steps:  # fall back to a broad search if the {user}/{run_name} segment differs
-        steps = sorted(save_root.rglob("step*"), key=_step_num)
-    complete = [s for s in steps if (s / "model_and_optim").is_dir() and (s / "config.json").exists()]
-    if complete:
-        return complete[-1]
-    if steps:
-        raise FileNotFoundError(f"checkpoint {steps[-1]} is missing config.json or model_and_optim/")
-    raise FileNotFoundError(f"no step* checkpoint under {save_root} (training may have failed to save)")
-
-
-def legacy_rope_config(config_path: Path) -> None:
-    """transformers 5.x serializes RoPE as a single `rope_parameters` field; mirror it back to the
-    legacy `rope_scaling` + top-level `rope_theta` (the format the base model + transformers 4.57 /
-    vLLM / sglang read) so the exported model loads correctly regardless of the inference stack."""
-    try:
-        cfg = json.loads(config_path.read_text())
-        rp = cfg.pop("rope_parameters", None)
-        if rp and not cfg.get("rope_scaling"):
-            cfg["rope_theta"] = rp.get("rope_theta", cfg.get("rope_theta", 500000))
-            cfg["rope_scaling"] = {k: v for k, v in rp.items() if k != "rope_theta"}
-            config_path.write_text(json.dumps(cfg, indent=2))
-            log.info("config: mirrored rope_parameters -> rope_scaling + rope_theta (transformers 4.x/vLLM compat)")
-    except Exception as exc:  # noqa: BLE001 — config tweak must not fail the export
-        log.warning("could not normalize rope config (%s); leaving as-is", exc)
-
-
-def parse_size(s: str) -> int:
-    """Parse a shard size like '5GB' / '4GiB' / '0' into bytes (0 => disabled). GB=10^9, GiB=2^30."""
-    s = (s or "").strip().upper()
-    if s in ("", "0", "NONE", "OFF"):
-        return 0
-    for suf, mult in (("GIB", 2**30), ("MIB", 2**20), ("GB", 10**9), ("MB", 10**6), ("B", 1)):
-        if s.endswith(suf):
-            return int(float(s[: -len(suf)]) * mult)
-    return int(s)
-
-
-def shard_safetensors(out_dir: Path, max_shard_bytes: int) -> None:
-    """Re-split a single model.safetensors into HF-style shards (model-0000i-of-0000N.safetensors +
-    model.safetensors.index.json) — the HF convention for >5 GB models. Touches ONLY the weights;
-    config / generation_config / tokenizer are left exactly as the converter wrote them. Low memory:
-    tensor sizes come from the header (no load), and only one shard is materialized at a time."""
-    try:
-        import struct
-        from safetensors import safe_open
-        from safetensors.torch import save_file
-
-        single = out_dir / "model.safetensors"
-        if not single.is_file():
-            return  # already sharded / nothing to do
-        with open(single, "rb") as fh:
-            header = json.loads(fh.read(struct.unpack("<Q", fh.read(8))[0]))
-        sizes = {k: v["data_offsets"][1] - v["data_offsets"][0]
-                 for k, v in header.items() if k != "__metadata__"}
-        shards: list[list[str]] = []
-        cur: list[str] = []
-        cur_sz = 0
-        for name, sz in sizes.items():  # greedy pack in file order
-            if cur and cur_sz + sz > max_shard_bytes:
-                shards.append(cur)
-                cur, cur_sz = [], 0
-            cur.append(name)
-            cur_sz += sz
-        if cur:
-            shards.append(cur)
-        if len(shards) <= 1:
-            log.info("export fits in one shard (<= %d B); leaving single file", max_shard_bytes)
-            return
-        n = len(shards)
-        weight_map: dict[str, str] = {}
-        with safe_open(str(single), framework="pt") as f:
-            for i, names in enumerate(shards, start=1):
-                fname = f"model-{i:05d}-of-{n:05d}.safetensors"
-                save_file({name: f.get_tensor(name) for name in names},
-                          str(out_dir / fname), metadata={"format": "pt"})
-                weight_map.update({name: fname for name in names})
-        index = {"metadata": {"total_size": sum(sizes.values())}, "weight_map": weight_map}
-        (out_dir / "model.safetensors.index.json").write_text(json.dumps(index, indent=2))
-        single.unlink()
-        log.info("sharded model.safetensors -> %d shards (<=%d B each)", n, max_shard_bytes)
-    except Exception as exc:  # noqa: BLE001 — sharding must not fail the export
-        log.warning("could not shard safetensors (%s); leaving single file", exc)
-
-
-def export_hf(checkpoint: Path, out_dir: Path, seq_len: int, shard_bytes: int = 0) -> None:
-    """Convert the trained OLMo-core distcp checkpoint to a HuggingFace safetensors model."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    run([sys.executable, str(CONVERT_TO_HF),
-         "-i", str(checkpoint), "-o", str(out_dir),
-         "-s", str(seq_len), "-t", TOKENIZER,
-         "--dtype", "bfloat16", "--skip-validation"])
-    legacy_rope_config(out_dir / "config.json")
-    if shard_bytes:
-        shard_safetensors(out_dir, shard_bytes)
-    log.info("exported HF model -> %s", out_dir)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -571,7 +452,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     logdir = Path(args.logdir).resolve() if args.logdir else output / "logs"
     save_root = output / "internal"          # training checkpoints + work_dir live here
     ckpt_base = workdir / "base-distcp"       # one-time HF->distcp conversion of the base model
-    hf_out = output / "model"                 # THE deliverable: exported HF safetensors
 
     workdir.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
@@ -630,20 +510,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         raise RuntimeError(f"run.sh failed (exit {rc}) — see {logdir / 'run.log'}")
     log.info("training finished in %.1f min", (time.monotonic() - t0) / 60.0)
 
-    if args.skip_export:
-        log.info("--skip_export set; leaving distcp checkpoints under %s", save_root)
-        return 0
-
-    checkpoint = find_final_checkpoint(save_root, final_name)
-    log.info("final checkpoint: %s", checkpoint)
-    export_hf(checkpoint, hf_out, seq_len, parse_size(args.shard_size))
-
-    # Manifest so the deliverable is self-describing.
+    # Conversion + upload is upload.py's job: it finds the final distcp under --output, converts to
+    # <output>/model (HF safetensors), and ships it. Manifest so the result is self-describing.
     (output / "MANIFEST.txt").write_text(
         f"experiment={args.experiment}\nmodel_size={recipe.model_size}\nprecision={recipe.precision}\n"
-        f"seq_len={seq_len}\nsource_checkpoint={checkpoint}\nhf_model={hf_out}\n"
+        f"seq_len={seq_len}\ncheckpoints={save_root}\n"
+        f"next=python /app/upload.py --output {output}\n"
         f"elapsed_min={(time.monotonic() - t0) / 60.0:.1f}\n")
-    log.info("DONE in %.1f min | HF model: %s", (time.monotonic() - t0) / 60.0, hf_out)
+    log.info("DONE in %.1f min | distcp under %s | next: python /app/upload.py --output %s",
+             (time.monotonic() - t0) / 60.0, save_root, output)
     return 0
 
 
