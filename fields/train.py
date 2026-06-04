@@ -80,10 +80,11 @@ RECIPES: dict[str, Recipe] = {
     # 32B recipes are added once the 7B submission passes (lr 1e-4, GBS 4,194,304).
 }
 
-# Mirrors olmo-core's MAX_RANK_MICROBATCH_SIZE_TOKENS (the SFT script) so cp_degree logging/validation
-# agree. AI2's 16384 = an H100 heuristic, not a hard limit; override with OLMO_MAX_TOKENS_PER_RANK
-# (H200's 141 GB handles 32768 -> cp 4->2 at seq 65536, more tokens/GPU + more data-parallelism).
-MAX_TOKENS_PER_RANK = int(os.environ.get("OLMO_MAX_TOKENS_PER_RANK", "16384"))
+# Per-GPU activation-token cap that sets cp_degree (cp = smallest pow2 with seq_len/cp <= this), mirroring
+# the SFT script's MAX_RANK_MICROBATCH_SIZE_TOKENS. AI2's 16384 = an H100 heuristic; we DEFAULT 32768 for
+# the H200 (141 GB) -> cp=2 at seq 65536, the most performant point. Override via --max-tokens-per-rank /
+# OLMO_MAX_TOKENS_PER_RANK (e.g. 16384 on an 80 GB H100 / cp=4, or 65536 for cp=1).
+MAX_TOKENS_PER_RANK = int(os.environ.get("OLMO_MAX_TOKENS_PER_RANK", "32768"))
 
 log = logging.getLogger("fields.train")
 
@@ -148,6 +149,11 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                    help="ADVANCED: per-DP-rank microbatch in TOKENS — MUST be a multiple of seq_len. 0 => "
                         "olmo-core auto (one sequence/rank). NOTE: with context parallelism + intra-document "
                         "masking (our 65536 SFT) it MUST stay at 1x seq_len; to use spare VRAM raise --olmo-ac-budget.")
+    p.add_argument("--max-tokens-per-rank", "--max_tokens_per_rank", dest="max_tokens_per_rank",
+                   type=int, default=MAX_TOKENS_PER_RANK,
+                   help="Per-GPU activation-token cap that sets cp_degree (cp = smallest pow2 with "
+                        "seq_len/cp <= this). Default 32768 (H200 => cp=2 at seq 65536). 16384 => cp=4 (H100), "
+                        "65536 => cp=1.")
     p.add_argument("--max-steps", "--max_steps", dest="max_steps", type=int, default=0,
                    help="Cap training at N steps (0 => use epochs).")
 
@@ -268,6 +274,7 @@ def build_env(args: argparse.Namespace, recipe: Recipe, workdir: Path, output: P
     if args.max_steps:
         env["MAX_STEPS"] = str(args.max_steps)
     # recipe internals (pass-through to run.sh / the SFT script)
+    env["OLMO_MAX_TOKENS_PER_RANK"] = str(args.max_tokens_per_rank)  # drives cp_degree in the SFT script
     env["OLMO_AC_BUDGET"] = str(args.olmo_ac_budget)
     env["OLMO_FUSED_LCE"] = str(args.olmo_fused_lce)
     env["OLMO_OPTIM_DTYPE"] = str(args.olmo_optim_dtype)
@@ -476,7 +483,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # Batching summary (informational; olmo-core does the real derivation). rank-microbatch must be a
     # multiple of seq_len if set — fail early with a clear message rather than mid-training.
-    cp = cp_degree(seq_len)
+    cp = cp_degree(seq_len, args.max_tokens_per_rank)
     rank_microbatch = args.rank_microbatch_tokens or seq_len  # auto = 1 sequence/rank
     if args.rank_microbatch_tokens:
         if args.rank_microbatch_tokens % seq_len != 0:
