@@ -70,7 +70,7 @@ class Recipe:
     precision: str           # "bf16" | "fp8"
     model_repo: str          # default HF base model (overridable by --model_path)
     default_lr: float        # AI2 SFT learning rate for this size
-    default_epochs: float = 2.0
+    default_epochs: float = 1.0   # AI2 ships 2; we default 1 (override with --num-train-epochs 2)
     seq_len: int = 65536
 
 
@@ -135,7 +135,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--learning_rate", "--learning-rate", dest="learning_rate", type=float, default=0.0,
                    help="Peak LR (0 => recipe default).")
     p.add_argument("--num_train_epochs", "--num-train-epochs", dest="num_train_epochs", type=float, default=0.0,
-                   help="Epochs (0 => recipe default = 2).")
+                   help="Epochs (0 => recipe default = 1; AI2's recipe is 2).")
 
     # Batching — the clean inputs olmo-core derives cp_degree / rank-microbatch / grad-accum FROM.
     p.add_argument("--global-batch-tokens", "--global_batch_tokens", dest="global_batch_tokens",
