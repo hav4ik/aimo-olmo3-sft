@@ -9,3 +9,6 @@ __pycache__/
 # Local scratch / outputs
 output/
 *.sif
+
+# Presigned S3 URLs to the creds-baked .sif — secret, never commit
+presigned_*.txt
