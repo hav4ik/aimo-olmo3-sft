@@ -299,22 +299,28 @@ def visible_gpus() -> int:
         return 1
 
 
-def find_final_checkpoint(save_root: Path, recipe: Recipe) -> Path:
-    """Locate the highest-step trained distcp checkpoint to feed convert_to_hf -i.
+def _step_num(p: Path) -> int:
+    digits = re.sub(r"\D", "", p.name)
+    return int(digits) if digits else -1
 
-    Layout (from the SFT script): {save_root}/checkpoints/{user}/olmo-sft/{run_name}/stepN[/model_and_optim].
-    Globs defensively (the {user}/ segment and the model_and_optim/ subdir can vary)."""
-    base = save_root / "checkpoints" / RUN_USER / "olmo-sft" / run_name(recipe)
-    candidates = sorted(base.glob("step*"), key=lambda p: int(re.sub(r"\D", "", p.name) or -1))
-    if not candidates:  # fall back to a broad search if the {user} segment differs
-        candidates = sorted(save_root.rglob("step*"), key=lambda p: int(re.sub(r"\D", "", p.name) or -1))
-    if not candidates:
-        raise FileNotFoundError(f"no step* checkpoint under {save_root} (training may have failed to save)")
-    step = candidates[-1]
-    for sub in ("model_and_optim", "model"):
-        if (step / sub).is_dir():
-            return step / sub
-    return step
+
+def find_final_checkpoint(save_root: Path, run_name_full: str) -> Path:
+    """Return the highest-step checkpoint ROOT to feed convert_to_hf -i.
+
+    Layout (SFT script): {save_root}/checkpoints/{user}/olmo-sft/{run_name}/stepN/ containing
+    config.json (per-checkpoint, from ConfigSaverCallback) AND model_and_optim/ (the distcp shards).
+    convert_to_hf reads <-i>/config.json and appends model_and_optim itself, so -i must be the stepN
+    dir — NOT the model_and_optim subdir. Pick the highest step that has BOTH."""
+    base = save_root / "checkpoints" / RUN_USER / "olmo-sft" / run_name_full
+    steps = sorted(base.glob("step*"), key=_step_num)
+    if not steps:  # fall back to a broad search if the {user}/{run_name} segment differs
+        steps = sorted(save_root.rglob("step*"), key=_step_num)
+    complete = [s for s in steps if (s / "model_and_optim").is_dir() and (s / "config.json").exists()]
+    if complete:
+        return complete[-1]
+    if steps:
+        raise FileNotFoundError(f"checkpoint {steps[-1]} is missing config.json or model_and_optim/")
+    raise FileNotFoundError(f"no step* checkpoint under {save_root} (training may have failed to save)")
 
 
 def export_hf(checkpoint: Path, out_dir: Path, seq_len: int) -> None:
@@ -540,7 +546,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         log.info("--skip_export set; leaving distcp checkpoints under %s", save_root)
         return 0
 
-    checkpoint = find_final_checkpoint(save_root, recipe)
+    checkpoint = find_final_checkpoint(save_root, final_name)
     log.info("final checkpoint: %s", checkpoint)
     export_hf(checkpoint, hf_out, seq_len)
 
