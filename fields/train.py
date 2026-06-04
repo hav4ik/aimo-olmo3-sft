@@ -61,6 +61,7 @@ BAKED_CODE_ROOT = Path(os.environ.get("FIELDS_CODE_ROOT", "/app/code"))
 
 # The deterministic identity train.py pins so it can locate the trained checkpoint afterwards.
 RUN_USER = "fields"  # -> save_folder = {OLMO_SFT_SAVE_ROOT}/checkpoints/{RUN_USER}/olmo-sft/{run_name}
+BAKED_HF_HOME = "/data/training/hf_cache"  # base-image default; relocated under --workdir at runtime
 TOKENIZER = "dolma2"
 DEFAULT_DATASET_REPO = "chankhavu/smolmo-proofs-cot-sft"
 DEFAULT_DATASET_SUBDIR = "olmocore"
@@ -518,6 +519,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     log.info("Fields Olmo-3 SFT | experiment=%s size=%s precision=%s seq_len=%d",
              args.experiment, recipe.model_size, recipe.precision, seq_len)
     log.info("workdir=%s  output=%s  logdir=%s", workdir, output, logdir)
+
+    # Keep the HF cache under --workdir so it lands in the writable (bound) area. The baked default
+    # /data/training/hf_cache can be a read-only, non-bound path under Singularity if --workdir points
+    # elsewhere. Only override the baked default; honor an explicitly-different HF_HOME.
+    if os.environ.get("HF_HOME", BAKED_HF_HOME) in (BAKED_HF_HOME, ""):
+        os.environ["HF_HOME"] = str(workdir / "hf_cache")
+        log.info("HF_HOME -> %s (under workdir)", os.environ["HF_HOME"])
 
     # Bring up the debug shell ASAP (every node) so you can attach even during download/convert.
     if args.remote_shell:
