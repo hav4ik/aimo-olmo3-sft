@@ -57,8 +57,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                    help="HF repo type for --hf_dataset.")
     p.add_argument("--hf_path_in_repo", default="",
                    help="Subpath inside the HF repo (default: repo root).")
-    p.add_argument("--hf_private", action="store_true", default=True, help="Create the HF repo private.")
-    p.add_argument("--hf_public", dest="hf_private", action="store_false", help="Create the HF repo public.")
+    p.add_argument("--hf_private", action="store_true", default=False, help="Create the HF repo private.")
+    p.add_argument("--hf_public", dest="hf_private", action="store_false", help="Create the HF repo public (the default).")
     p.add_argument("--archive_name", default="", help="Name for the S3 tar.gz (default: <source_dir>.tar.gz).")
     return p.parse_args(argv)
 
