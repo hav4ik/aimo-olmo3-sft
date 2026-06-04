@@ -108,8 +108,8 @@ case "$CC" in 9.*) DEFATTN=flash_3 ;; *) DEFATTN=flash_2 ;; esac
 # implemented ONLY on the FA2 backend — FlashAttention3 raises "doesn't support ring context
 # parallelism". So when CP will engage with ring, force FA2 even on sm_90/H200 (FA3's Hopper speedup is
 # moot once CP is required). FA3 stays the default only for short-context (no-CP) runs, e.g. smokes.
-if [ "${SEQ_LEN:-65536}" -gt 16384 ] && [ "${OLMO_CP_STYLE:-ring}" = "ring" ]; then
-    DEFATTN=flash_2
+if [ "${SEQ_LEN:-65536}" -gt "${OLMO_MAX_TOKENS_PER_RANK:-16384}" ] && [ "${OLMO_CP_STYLE:-ring}" = "ring" ]; then
+    DEFATTN=flash_2   # CP engages (seq_len exceeds the per-rank cap) with ring -> FA2. At cp=1 (cap>=seq_len) FA3 stays.
 fi
 export OLMO_ATTN_BACKEND="${OLMO_ATTN_BACKEND:-$DEFATTN}"
 export OLMO_SFT_SAVE_ROOT="${OLMO_SFT_SAVE_ROOT:-$DATA/checkpoints}"   # overridable: Fields train.py -> --output (OLMO_FP8 set arch-aware above; all-attn stays BF16)
