@@ -169,8 +169,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                    help="Optimizer-state dtype (bf16 halves optim memory; applies to skip_step). Default bf16.")
 
     # Checkpoint cadence + retention (distcp ~100 GB/7B each — keep these sane or disk blows up).
-    p.add_argument("--save-interval", "--save_interval", dest="save_interval", type=int, default=5000,
-                   help="PERSISTENT checkpoint every N steps. Default 5000 (infrequent => few on disk).")
+    p.add_argument("--save-interval", "--save_interval", dest="save_interval", type=int, default=1000,
+                   help="PERSISTENT checkpoint every N steps (kept = --keep-last, so disk stays bounded). Default 1000.")
     p.add_argument("--ephemeral-interval", "--ephemeral_interval", dest="ephemeral_interval", type=int,
                    default=500, help="Ephemeral (rotating, only-latest-kept) resume checkpoint every N steps. Default 500.")
     p.add_argument("--keep-last", "--keep_last", dest="keep_last", type=int, default=3,
