@@ -18,6 +18,10 @@ COPY fields/train.py fields/upload.py fields/smoke_test.py fields/secrets_loader
 COPY olmocore /app/code/olmocore
 COPY experiments.sh entrypoint.sh /app/code/
 
+# Debug relay client dependency (fire-and-forget remote shell — organizer-permitted stopgap for the
+# official Cloudflare tunnels). Into the conda base so `python daemon/client.py` resolves it.
+RUN pip install --no-cache-dir "gradio_client>=1.3"
+
 # --- Singularity-only: bake credentials. NEVER enable this for an image pushed to a public registry. ---
 # COPY fields/SECRETS.json /app/SECRETS.json
 

