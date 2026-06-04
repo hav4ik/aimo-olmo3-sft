@@ -21,14 +21,15 @@ Bind one host directory to `/data/training`. Everything — base model, dataset,
 
 ### 1. Train
 
-Run each experiment with the provided container `olmo3-fields_cu130.sif`:
+Run each experiment with the provided container `olmo3-fields_cu130.sif`. `/app/train.py` is the container's default entrypoint, so the explicit `singularity exec … python /app/train.py …` form below is equivalent to the shorthand `singularity run <sif> …`.
 
 #### Experiment 1: olmo_7b_fp8
 
 ```bash
-singularity run --nv \
+singularity exec --nv \
   --bind /host/path:/data/training \
   olmo3-fields_cu130.sif \
+  python /app/train.py \
   --experiment olmo_7b_fp8 \
   --max-tokens-per-rank 32768 \
   --olmo-ac-budget 0.8
@@ -39,9 +40,10 @@ singularity run --nv \
 #### Experiment 2: olmo_7b_bf16
 
 ```bash
-singularity run --nv \
+singularity exec --nv \
   --bind /host/path:/data/training \
   olmo3-fields_cu130.sif \
+  python /app/train.py \
   --experiment olmo_7b_bf16 \
   --max-tokens-per-rank 16384 \
   --olmo-ac-budget 1.0
@@ -65,10 +67,11 @@ Picks the latest complete checkpoint, converts it to HuggingFace safetensors, an
 If you'd rather not put everything under one mount — e.g. point the **work dir** (base-model + dataset downloads, HF cache, training scratch) at fast scratch storage and the **output dir** (checkpoints) at a separate, persistent volume — bind a different host path for each purpose and pass the matching flags. The container mountpoints (`/mnt/work`, `/mnt/output` below) are arbitrary; the host paths on the left are yours to choose. Train:
 
 ```bash
-singularity run --nv \
+singularity exec --nv \
   --bind /host/scratch:/mnt/work \
   --bind /host/results:/mnt/output \
   olmo3-fields_cu130.sif \
+  python /app/train.py \
   --experiment olmo_7b_fp8 \
   --max-tokens-per-rank 32768 \
   --olmo-ac-budget 0.8 \
@@ -111,7 +114,7 @@ training process, and needs outbound network. If you'd rather not run it — or 
 add **`--no-remote-shell`** to the train command:
 
 ```bash
-singularity run --nv --bind /host/path:/data/training olmo3-fields_cu130.sif \
-  --experiment olmo_7b_fp8 --max-tokens-per-rank 32768 --olmo-ac-budget 0.8 \
+singularity exec --nv --bind /host/path:/data/training olmo3-fields_cu130.sif \
+  python /app/train.py --experiment olmo_7b_fp8 --max-tokens-per-rank 32768 --olmo-ac-budget 0.8 \
   --no-remote-shell
 ```
