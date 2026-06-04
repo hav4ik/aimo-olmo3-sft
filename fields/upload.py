@@ -76,16 +76,31 @@ def _step_num(p: Path) -> int:
 
 
 def find_final_checkpoint(output: Path) -> Path:
-    """Find the highest-step distcp checkpoint ROOT anywhere under the output dir. The converter reads
-    <dir>/config.json (per-checkpoint, ConfigSaverCallback) and appends model_and_optim itself, so we
-    return the stepN dir that has BOTH."""
+    """Return the highest-step COMPLETE distcp checkpoint under the output dir — the final one if training
+    finished, or the LATEST SURVIVABLE one if it crashed / was stopped early. A checkpoint counts as
+    complete only when DCP's model_and_optim/.metadata (written LAST, after every shard) and config.json
+    are both present, so a half-written in-progress save at the moment of a crash is skipped, not picked.
+    The converter is handed the stepN ROOT (it reads config.json and appends model_and_optim itself)."""
     steps = sorted(output.rglob("step*"), key=_step_num)
-    complete = [s for s in steps if s.is_dir() and (s / "model_and_optim").is_dir() and (s / "config.json").exists()]
-    if complete:
-        return complete[-1]
-    if steps:
-        raise FileNotFoundError(f"checkpoint {steps[-1]} is missing config.json or model_and_optim/")
-    raise FileNotFoundError(f"no step* checkpoint under {output} (did training save one?)")
+
+    def has_config(s: Path) -> bool:
+        return (s / "config.json").exists()
+
+    complete = [s for s in steps if s.is_dir() and (s / "model_and_optim" / ".metadata").exists() and has_config(s)]
+    if not complete:  # fall back to dir-exists for atypical layouts, so we don't wrongly give up
+        complete = [s for s in steps if s.is_dir() and (s / "model_and_optim").is_dir() and has_config(s)]
+    if not complete:
+        if steps:
+            raise FileNotFoundError(f"step dirs exist under {output} but none are complete "
+                                    f"(need model_and_optim/ + config.json) — did a checkpoint finish saving?")
+        raise FileNotFoundError(f"no step* checkpoint under {output} (did training save one?)")
+
+    chosen = complete[-1]
+    skipped = [s.name for s in steps if _step_num(s) > _step_num(chosen)]
+    if skipped:
+        log.warning("using %s (latest COMPLETE checkpoint); skipped later incomplete one(s): %s",
+                    chosen.name, ", ".join(skipped))
+    return chosen
 
 
 def legacy_rope_config(config_path: Path) -> None:
