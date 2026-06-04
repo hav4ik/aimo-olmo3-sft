@@ -60,6 +60,7 @@ torch_compile_backend: inductor
 fsdp_version: 2
 fsdp_config:
   offload_params: false
+  activation_checkpointing: true   # FSDP2-native AC (replaces top-level gradient_checkpointing — no redundant backward all-gather)
   cpu_ram_efficient_loading: false   # MUST be false with torchao FP8 (accelerate hard-errors otherwise)
   auto_wrap_policy: TRANSFORMER_BASED_WRAP
   transformer_layer_cls_to_wrap: Olmo3DecoderLayer
@@ -67,9 +68,8 @@ fsdp_config:
   reshard_after_forward: true
   mixed_precision_policy: bf16
 
-gradient_checkpointing: true
-gradient_checkpointing_kwargs:
-  use_reentrant: false
+# activation checkpointing moved into fsdp_config above (FSDP2-native, non-reentrant): avoids the
+# redundant backward all-gather that top-level gradient_checkpointing triggers under FSDP full-shard.
 
 # GBS = micro_batch × grad_accum × dp_world × seq_len; match OLMo-core's ~1,048,576 tok (=16 seqs of 65536).
 # So set grad_accum × dp_world = 16: e.g. 8 GPUs / CP=2 -> dp_world=4 -> grad_accum=4 (as below);

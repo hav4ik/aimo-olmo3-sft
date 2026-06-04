@@ -5,7 +5,7 @@
 # tensorwise on sm_120), and FP8 on ALL linears (vs OLMo-core's FFN-only / attention+lm_head BF16) — each
 # framework at its best. Requires torch_compile + FSDP2; pass CONTEXT_PARALLEL_SIZE>1 for 65536. MODEL_SIZE=32b
 # PRECISION=fp8. NOTE: axolotl has no bf16-optimizer-state / budget-AC equivalent — for the memory-bound
-# 32B it uses full gradient_checkpointing + fp32 fused-AdamW states (heavier than OLMo-core's options).
+# 32B it uses full (FSDP2-native) activation checkpointing + fp32 fused-AdamW states (heavier than OLMo-core's options).
 
 base_model: allenai/Olmo-3.1-32B-Think
 
@@ -46,6 +46,7 @@ torch_compile_backend: inductor
 fsdp_version: 2
 fsdp_config:
   offload_params: false
+  activation_checkpointing: true   # FSDP2-native AC (replaces top-level gradient_checkpointing — no redundant backward all-gather)
   cpu_ram_efficient_loading: false   # MUST be false with torchao FP8 (accelerate hard-errors otherwise)
   auto_wrap_policy: TRANSFORMER_BASED_WRAP
   transformer_layer_cls_to_wrap: Olmo3DecoderLayer
@@ -53,9 +54,8 @@ fsdp_config:
   reshard_after_forward: true
   mixed_precision_policy: bf16
 
-gradient_checkpointing: true
-gradient_checkpointing_kwargs:
-  use_reentrant: false
+# activation checkpointing moved into fsdp_config above (FSDP2-native, non-reentrant): avoids the
+# redundant backward all-gather that top-level gradient_checkpointing triggers under FSDP full-shard.
 
 # 32B recipe GBS = 4,194,304 tok = 64 seqs @ seq 65536 (4x the 7B). Set grad_accum × dp_world = 64:
 # e.g. 64 GPUs / CP=4 -> dp_world=16 -> grad_accum=4; 32 GPUs / CP=4 -> dp_world=8 -> grad_accum=8.

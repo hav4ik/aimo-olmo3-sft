@@ -45,6 +45,7 @@ torch_compile_backend: inductor
 fsdp_version: 2
 fsdp_config:
   offload_params: false
+  activation_checkpointing: true   # FSDP2-native AC (replaces top-level gradient_checkpointing — no redundant backward all-gather)
   cpu_ram_efficient_loading: true
   auto_wrap_policy: TRANSFORMER_BASED_WRAP
   transformer_layer_cls_to_wrap: Olmo3DecoderLayer
@@ -52,9 +53,8 @@ fsdp_config:
   reshard_after_forward: true
   mixed_precision_policy: bf16
 
-gradient_checkpointing: true
-gradient_checkpointing_kwargs:
-  use_reentrant: false
+# activation checkpointing moved into fsdp_config above (FSDP2-native, non-reentrant): avoids the
+# redundant backward all-gather that top-level gradient_checkpointing triggers under FSDP full-shard.
 
 # 32B recipe global batch = 4,194,304 tok = 128 seqs @ seq 32768 (4x the 7B). micro 1 x accum
 # x num_gpus = 128: 32 GPUs -> accum 4 (below); 64 -> accum 2; 16 -> accum 8. Adjust for your shape.

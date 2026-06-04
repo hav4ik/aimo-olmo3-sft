@@ -59,6 +59,7 @@ torch_compile_backend: inductor
 fsdp_version: 2
 fsdp_config:
   offload_params: false
+  activation_checkpointing: true   # FSDP2-native AC (replaces top-level gradient_checkpointing — no redundant backward all-gather)
   cpu_ram_efficient_loading: true
   auto_wrap_policy: TRANSFORMER_BASED_WRAP
   transformer_layer_cls_to_wrap: Olmo3DecoderLayer
@@ -66,9 +67,8 @@ fsdp_config:
   reshard_after_forward: true
   mixed_precision_policy: bf16   # bf16 compute on the fp32-resident master (Pattern B)
 
-gradient_checkpointing: true
-gradient_checkpointing_kwargs:
-  use_reentrant: false
+# activation checkpointing moved into fsdp_config above (FSDP2-native, non-reentrant): avoids the
+# redundant backward all-gather that top-level gradient_checkpointing triggers under FSDP full-shard.
 
 # 8 GPUs x micro 1 x accum 4 x seq 32768 = 1,048,576 tokens/step (recipe global batch).
 # For 16 GPUs use accum 2; for 4 GPUs use accum 8 — keep the product at 1,048,576.
