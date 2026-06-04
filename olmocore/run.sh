@@ -106,6 +106,12 @@ fi
 case "$CC" in 9.*) DEFATTN=flash_3 ;; *) DEFATTN=flash_2 ;; esac
 export OLMO_ATTN_BACKEND="${OLMO_ATTN_BACKEND:-$DEFATTN}"
 export OLMO_SFT_SAVE_ROOT="${OLMO_SFT_SAVE_ROOT:-$DATA/checkpoints}"   # overridable: Fields train.py -> --output (OLMO_FP8 set arch-aware above; all-attn stays BF16)
+# Shared filesystem across nodes (the default; our pipeline already assumes it — rank-0 stages on the
+# shared mount + others wait on sentinels). Tells olmo-core get_fs_local_rank() = GLOBAL rank, so ONLY
+# global-rank-0 does FS bookkeeping (dir/metadata/checkpoint-pruning/config). WITHOUT this, multi-node
+# would have each node's local-rank-0 redundantly racing those ops on the shared dir. Set
+# OLMO_SHARED_FS=0 only for a genuine per-node (non-shared) filesystem (then also set FS_LOCAL_RANK).
+export OLMO_SHARED_FS="${OLMO_SHARED_FS:-1}"
 
 # Optimizer per precision: fused AdamW for the stable BF16 baseline (single fused CUDA kernel =
 # faster), SkipStepAdamW for FP8 (spike protection + the trainer's `optim/step skipped` metric,
