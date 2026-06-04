@@ -95,7 +95,10 @@ not a masking difference.
   `labels_mask_part_*.npy` (offline). `Olmo-3-7B-SFT-local.py` memory-maps the `.npy`;
   it never tokenizes. Packer splits documents on `<|endoftext|>`.
 - **axolotl**: `axolotl preprocess` tokenizes once into `dataset_prepared_path`
-  (offline) with the olmo template; `axolotl train` reads that cache.
+  (offline) with the olmo template; `axolotl train` reads that cache. That cache is
+  **uncompressed arrow (~120 GB for our 6 B-token set)** and not portable. To ship a
+  compact, pushable pre-tokenized form (~15 GB) that Axolotl loads natively, see
+  **[AXOLOTL_PRETOKENIZED.md](AXOLOTL_PRETOKENIZED.md)** + `data_prep/arrow_to_pretokenized_parquet.py`.
 
 Note: open-instruct **truncates** long examples to `--max_seq_length`; axolotl
 **drops** examples longer than `sequence_len`. So keep `sequence_len` ≥ the prep's
