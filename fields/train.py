@@ -307,6 +307,104 @@ def export_hf(checkpoint: Path, out_dir: Path, seq_len: int) -> None:
 
 
 # --------------------------------------------------------------------------------------------------
+# W&B continuity — open the run at setup, hand it off to olmo-core's rank-0 worker (same run id)
+# --------------------------------------------------------------------------------------------------
+# run.sh markers (substring -> setup phase) used to update the run summary while download/convert run.
+SETUP_MARKERS = [
+    ("[olmocore] staging HF model", "download_model"),
+    ("[olmocore] converting", "convert"),
+    ("[olmocore] convert complete", "convert_done"),
+    ("[olmocore] downloading", "download_data"),
+    ("[olmocore] data ready", "data_done"),
+]
+TRAIN_LAUNCH_MARKER = "[olmocore] run:"  # printed right before torchrun => hand the run to the worker
+
+
+def is_node_zero() -> bool:
+    """Only node 0 logs to W&B (matches olmo-core, which logs from global rank 0 = node-0's worker)."""
+    return os.environ.get("NODE_RANK", os.environ.get("GLOBAL_RANK", "0")) == "0"
+
+
+def wandb_run_id(name: str) -> str:
+    """Deterministic W&B run id from the run name (so a crash-relaunch resumes the same run)."""
+    return re.sub(r"[^A-Za-z0-9_.-]", "-", name)[:128]
+
+
+def open_setup_wandb(args: argparse.Namespace, recipe: Recipe, final_name: str, seq_len: int, cp: int,
+                     rank_microbatch: int, workdir: Path, output: Path, code_sha: str):
+    """Open the W&B run NOW (node 0 only) so the job is visible during download/convert, and export the
+    shared id/resume env so olmo-core's rank-0 worker resumes THIS run for training. Returns the run or None."""
+    if not is_node_zero() or not os.environ.get("WANDB_API_KEY"):
+        return None
+    run_id = wandb_run_id(final_name)
+    project = os.environ.setdefault("WANDB_PROJECT", "olmo3-7b-sft")  # match olmo-core's default
+    os.environ["WANDB_RUN_ID"] = run_id      # inherited by run.sh -> torchrun -> the rank-0 worker
+    os.environ["WANDB_RESUME"] = "allow"
+    try:
+        import wandb
+        wdir = output / "wandb"
+        wdir.mkdir(parents=True, exist_ok=True)
+        run = wandb.init(
+            id=run_id, resume="allow", project=project, name=final_name,
+            entity=os.environ.get("WANDB_ENTITY") or None,
+            group=os.environ.get("WANDB_RUN_GROUP") or None, dir=str(wdir),
+            config={
+                "experiment": args.experiment, "model_size": recipe.model_size,
+                "precision": recipe.precision, "seq_len": seq_len, "cp_degree": cp,
+                "global_batch_tokens": args.global_batch_tokens,
+                "rank_microbatch_tokens": args.rank_microbatch_tokens or rank_microbatch,
+                "num_gpus": args.num_gpus or visible_gpus(), "ac_budget": args.olmo_ac_budget,
+                "fused_lce": args.olmo_fused_lce, "optim_dtype": args.olmo_optim_dtype,
+                "code_sha": code_sha, "workdir": str(workdir), "output": str(output),
+            },
+        )
+        run.summary["setup/phase"] = "starting"
+        log.info("W&B run open (id=%s, project=%s) — the training worker resumes this same run", run_id, project)
+        return run
+    except Exception as exc:  # noqa: BLE001 — never let W&B block training
+        log.warning("could not open early W&B run (%s); continuing without it", exc)
+        return None
+
+
+def stream_run_sh(cmd: list[str], env: dict[str, str], cwd: Path, log_path: Path, wb) -> int:
+    """Run run.sh, tee its output to console + <logdir>/run.log, and (if wb) update the run summary on
+    setup markers — finishing the run at the training-launch marker so the worker can resume it."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    t0 = time.monotonic()
+    active = wb is not None
+    log.info("exec: %s", " ".join(cmd))
+    proc = subprocess.Popen(cmd, env=env, cwd=str(cwd), stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, bufsize=1)
+    with open(log_path, "a") as lf:
+        for line in proc.stdout:  # type: ignore[union-attr]
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            lf.write(line)
+            if active:
+                try:
+                    for sub, phase in SETUP_MARKERS:
+                        if sub in line:
+                            wb.summary[f"setup/{phase}_at_sec"] = round(time.monotonic() - t0, 1)
+                            wb.summary["setup/phase"] = phase
+                    if TRAIN_LAUNCH_MARKER in line:
+                        wb.summary["setup/total_sec"] = round(time.monotonic() - t0, 1)
+                        wb.summary["setup/phase"] = "training"
+                        wb.finish()        # hand off: the rank-0 worker resumes this run id
+                        active = False
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("W&B setup logging error (%s); dropping early logging", exc)
+                    active = False
+    proc.wait()
+    if active:  # run.sh exited before training started (e.g. a setup crash) — close the run cleanly
+        try:
+            wb.summary["setup/phase"] = "failed_before_training"
+            wb.finish()
+        except Exception:  # noqa: BLE001
+            pass
+    return proc.returncode
+
+
+# --------------------------------------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------------------------------------
 def main(argv: Optional[list[str]] = None) -> int:
@@ -334,6 +432,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # Batching summary (informational; olmo-core does the real derivation). rank-microbatch must be a
     # multiple of seq_len if set — fail early with a clear message rather than mid-training.
     cp = cp_degree(seq_len)
+    rank_microbatch = args.rank_microbatch_tokens or seq_len  # auto = 1 sequence/rank
     if args.rank_microbatch_tokens and args.rank_microbatch_tokens % seq_len != 0:
         raise ValueError(f"--rank-microbatch-tokens ({args.rank_microbatch_tokens}) must be a multiple of "
                          f"seq_len ({seq_len}) — olmo-core requires it.")
@@ -347,11 +446,24 @@ def main(argv: Optional[list[str]] = None) -> int:
     run_sh = code_root / "olmocore" / "run.sh"
     if not run_sh.is_file():
         raise FileNotFoundError(f"run.sh not found at {run_sh}")
+    try:
+        code_sha = subprocess.check_output(["git", "-C", str(code_root), "rev-parse", "--short", "HEAD"],
+                                           stderr=subprocess.DEVNULL).decode().strip()
+    except Exception:  # noqa: BLE001
+        code_sha = "baked"
+
+    # Open the W&B run now (node 0) so the job is visible from setup; export the shared id/resume so
+    # olmo-core's rank-0 worker RESUMES this same run for training metrics (one continuous timeline).
+    final_name = run_name(recipe) + (f"-{args.run_suffix}" if args.run_suffix else "")
+    wb = open_setup_wandb(args, recipe, final_name, seq_len, cp, rank_microbatch, workdir, output, code_sha)
 
     env = build_env(args, recipe, workdir, output, logdir, seq_len, ckpt_base, save_root)
 
-    # run.sh does: HF base -> distcp convert (cached) + dataset download + torchrun training.
-    run(["bash", str(run_sh)], env=env, cwd=code_root)
+    # run.sh does: HF base -> distcp convert (cached) + dataset download + torchrun training. Streamed so
+    # we can update the W&B setup phases from run.sh's markers and hand the run off at training launch.
+    rc = stream_run_sh(["bash", str(run_sh)], env, code_root, logdir / "run.log", wb)
+    if rc != 0:
+        raise RuntimeError(f"run.sh failed (exit {rc}) — see {logdir / 'run.log'}")
     log.info("training finished in %.1f min", (time.monotonic() - t0) / 60.0)
 
     if args.skip_export:
