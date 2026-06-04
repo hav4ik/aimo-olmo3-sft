@@ -168,6 +168,14 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                    default=os.environ.get("OLMO_OPTIM_DTYPE", "bf16"),
                    help="Optimizer-state dtype (bf16 halves optim memory; applies to skip_step). Default bf16.")
 
+    # Checkpoint cadence + retention (distcp ~100 GB/7B each — keep these sane or disk blows up).
+    p.add_argument("--save-interval", "--save_interval", dest="save_interval", type=int, default=5000,
+                   help="PERSISTENT checkpoint every N steps. Default 5000 (infrequent => few on disk).")
+    p.add_argument("--ephemeral-interval", "--ephemeral_interval", dest="ephemeral_interval", type=int,
+                   default=500, help="Ephemeral (rotating, only-latest-kept) resume checkpoint every N steps. Default 500.")
+    p.add_argument("--keep-last", "--keep_last", dest="keep_last", type=int, default=3,
+                   help="Cap on PERSISTENT checkpoints kept (oldest pruned as new ones land; 0 = keep all). Default 3.")
+
     # Sources (override the defaults if you host the artifacts elsewhere).
     p.add_argument("--dataset_repo", default=DEFAULT_DATASET_REPO, help="HF dataset repo to download when --dataset_path is unset.")
     p.add_argument("--dataset_subdir", default=DEFAULT_DATASET_SUBDIR, help="Subdir in the dataset repo holding the .npy.")
@@ -258,6 +266,9 @@ def build_env(args: argparse.Namespace, recipe: Recipe, workdir: Path, output: P
     env["OLMO_AC_BUDGET"] = str(args.olmo_ac_budget)
     env["OLMO_FUSED_LCE"] = str(args.olmo_fused_lce)
     env["OLMO_OPTIM_DTYPE"] = str(args.olmo_optim_dtype)
+    env["OLMO_SAVE_INTERVAL"] = str(args.save_interval)
+    env["OLMO_EPHEMERAL_INTERVAL"] = str(args.ephemeral_interval)
+    env["OLMO_KEEP_LAST_CKPTS"] = str(args.keep_last)
     if args.run_suffix:
         env["RUN_SUFFIX"] = str(args.run_suffix)
     # logs: run.sh + torchrun inherit; we also tee bootstrap-style below
