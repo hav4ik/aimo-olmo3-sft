@@ -85,7 +85,22 @@ RECIPES: dict[str, Recipe] = {
     # 32B recipes are added once the 7B submission passes (lr 1e-4, GBS 4,194,304).
 }
 
+# Mirrors olmo-core's MAX_RANK_MICROBATCH_SIZE_TOKENS (the SFT script). cp_degree is auto-derived from
+# seq_len against this cap: H100/H200 = 16384 (cluster local_h100). B200 doubles it — not our target.
+MAX_TOKENS_PER_RANK = 16384
+
 log = logging.getLogger("fields.train")
+
+
+def cp_degree(seq_len: int, max_tokens_per_rank: int = MAX_TOKENS_PER_RANK) -> int:
+    """Replicate olmo-core BatchSizeConfig: smallest power-of-2 cp with seq_len/cp <= cap (1 if it fits).
+    On H200 at seq 65536 this is 4 — see the SFT script's BatchSizeConfig.__post_init__."""
+    if seq_len <= max_tokens_per_rank:
+        return 1
+    cp = 2
+    while seq_len // cp > max_tokens_per_rank:
+        cp *= 2
+    return cp
 
 
 # --------------------------------------------------------------------------------------------------
@@ -118,17 +133,40 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                    help="Log dir. Defaults to <output>/logs.")
 
     # Optional hyperparameters (0/empty => recipe default => reproduces AI2). Fields-standard names.
-    p.add_argument("--num_gpus", type=int, default=0, help="GPUs per node (0 => all visible).")
-    p.add_argument("--learning_rate", type=float, default=0.0, help="Peak LR (0 => recipe default).")
-    p.add_argument("--num_train_epochs", type=float, default=0.0, help="Epochs (0 => recipe default = 2).")
-    p.add_argument("--per_device_batch_size", type=int, default=0,
-                   help="Sequences per micro-step per rank (0 => recipe auto). Maps to rank_microbatch_size = this*seq_len tokens.")
-    p.add_argument("--gradient_accumulation_steps", type=int, default=0,
-                   help="0 => derived from global_batch_size (recommended; keeps GBS fixed).")
-    p.add_argument("--global_batch_size", type=int, default=0,
-                   help="Global batch in TOKENS (0 => recipe default: 7B=1,048,576).")
-    p.add_argument("--seq_len", type=int, default=0, help="Max sequence length (0 => recipe default = 65536).")
-    p.add_argument("--max_steps", type=int, default=0, help="Cap training at N steps (0 => use epochs).")
+    p.add_argument("--num_gpus", "--num-gpus", dest="num_gpus", type=int, default=0,
+                   help="GPUs per node (0 => all visible).")
+    p.add_argument("--learning_rate", "--learning-rate", dest="learning_rate", type=float, default=0.0,
+                   help="Peak LR (0 => recipe default).")
+    p.add_argument("--num_train_epochs", "--num-train-epochs", dest="num_train_epochs", type=float, default=0.0,
+                   help="Epochs (0 => recipe default = 2).")
+
+    # Batching — the clean inputs olmo-core derives cp_degree / rank-microbatch / grad-accum FROM.
+    p.add_argument("--global-batch-tokens", "--global_batch_tokens", dest="global_batch_tokens",
+                   type=int, default=1_048_576,
+                   help="Global batch in TOKENS. olmo-core derives cp_degree/rank-microbatch/grad-accum from "
+                        "this + seq_len + world_size. Default 1,048,576 (AI2 7B recipe).")
+    p.add_argument("--seq-len", "--seq_len", dest="seq_len", type=int, default=0,
+                   help="Max sequence length (0 => recipe default = 65536).")
+    p.add_argument("--rank-microbatch-tokens", "--rank_microbatch_tokens", dest="rank_microbatch_tokens",
+                   type=int, default=0,
+                   help="ADVANCED: per-DP-rank microbatch in TOKENS — MUST be a multiple of seq_len (per-GPU "
+                        "tokens = this / cp_degree). 0 => olmo-core auto-derives (one sequence/rank). Raise to "
+                        "pack more sequences per microstep and spend spare VRAM on throughput.")
+    p.add_argument("--max-steps", "--max_steps", dest="max_steps", type=int, default=0,
+                   help="Cap training at N steps (0 => use epochs).")
+
+    # Recipe internals — clean env pass-through to run.sh / the SFT script (an existing env value wins).
+    p.add_argument("--run-suffix", "--run_suffix", dest="run_suffix", default=os.environ.get("RUN_SUFFIX", ""),
+                   help="Suffix appended to RUN_NAME (W&B run + checkpoint dir). Default: none.")
+    p.add_argument("--olmo-ac-budget", "--olmo_ac_budget", dest="olmo_ac_budget",
+                   default=os.environ.get("OLMO_AC_BUDGET", "0.8"),
+                   help="Activation-checkpointing budget: 1.0=store all (max mem), 0.0=recompute all. Default 0.8.")
+    p.add_argument("--olmo-fused-lce", "--olmo_fused_lce", dest="olmo_fused_lce",
+                   default=os.environ.get("OLMO_FUSED_LCE", "1"),
+                   help="Liger fused linear cross-entropy (z-loss fix is in the fork). Default 1 (on).")
+    p.add_argument("--olmo-optim-dtype", "--olmo_optim_dtype", dest="olmo_optim_dtype",
+                   default=os.environ.get("OLMO_OPTIM_DTYPE", "bf16"),
+                   help="Optimizer-state dtype (bf16 halves optim memory; applies to skip_step). Default bf16.")
 
     # Sources (override the defaults if you host the artifacts elsewhere).
     p.add_argument("--dataset_repo", default=DEFAULT_DATASET_REPO, help="HF dataset repo to download when --dataset_path is unset.")
@@ -208,13 +246,20 @@ def build_env(args: argparse.Namespace, recipe: Recipe, workdir: Path, output: P
         env["DATASET_NAME"] = "fields"
     # base model source: local dir wins, else the recipe's HF repo (run.sh stages it)
     env["HF_MODEL"] = args.model_path or recipe.model_repo
-    # optional batch overrides (default unset => run.sh uses AI2 auto-derivation at fixed GBS)
-    if args.global_batch_size:
-        env["GLOBAL_BATCH_SIZE"] = str(args.global_batch_size)
-    if args.per_device_batch_size:
-        env["RANK_MICROBATCH_TOKENS"] = str(args.per_device_batch_size * seq_len)
+    # batching: GLOBAL_BATCH_SIZE is the primary knob (olmo-core derives cp/microbatch/grad-accum from
+    # it). RANK_MICROBATCH_TOKENS is the optional VRAM/throughput override (0 => olmo-core auto-derives
+    # the minimal 1 sequence/rank). Both in tokens.
+    env["GLOBAL_BATCH_SIZE"] = str(args.global_batch_tokens)
+    if args.rank_microbatch_tokens:
+        env["RANK_MICROBATCH_TOKENS"] = str(args.rank_microbatch_tokens)
     if args.max_steps:
         env["MAX_STEPS"] = str(args.max_steps)
+    # recipe internals (pass-through to run.sh / the SFT script)
+    env["OLMO_AC_BUDGET"] = str(args.olmo_ac_budget)
+    env["OLMO_FUSED_LCE"] = str(args.olmo_fused_lce)
+    env["OLMO_OPTIM_DTYPE"] = str(args.olmo_optim_dtype)
+    if args.run_suffix:
+        env["RUN_SUFFIX"] = str(args.run_suffix)
     # logs: run.sh + torchrun inherit; we also tee bootstrap-style below
     env["LOGDIR"] = str(logdir)
     return env
@@ -285,6 +330,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     log.info("Fields Olmo-3 SFT | experiment=%s size=%s precision=%s seq_len=%d",
              args.experiment, recipe.model_size, recipe.precision, seq_len)
     log.info("workdir=%s  output=%s  logdir=%s", workdir, output, logdir)
+
+    # Batching summary (informational; olmo-core does the real derivation). rank-microbatch must be a
+    # multiple of seq_len if set — fail early with a clear message rather than mid-training.
+    cp = cp_degree(seq_len)
+    if args.rank_microbatch_tokens and args.rank_microbatch_tokens % seq_len != 0:
+        raise ValueError(f"--rank-microbatch-tokens ({args.rank_microbatch_tokens}) must be a multiple of "
+                         f"seq_len ({seq_len}) — olmo-core requires it.")
+    rmb = (f"{args.rank_microbatch_tokens} tok ({args.rank_microbatch_tokens // seq_len} seq/rank, "
+           f"~{args.rank_microbatch_tokens // cp} tok/GPU)" if args.rank_microbatch_tokens
+           else f"auto (1 seq/rank, ~{seq_len // cp} tok/GPU)")
+    log.info("batching | global=%d tok | seq_len=%d | cp_degree~%d | rank_microbatch=%s | ac_budget=%s",
+             args.global_batch_tokens, seq_len, cp, rmb, args.olmo_ac_budget)
 
     code_root = stage_code(args.code_repo, args.code_ref, workdir)
     run_sh = code_root / "olmocore" / "run.sh"
