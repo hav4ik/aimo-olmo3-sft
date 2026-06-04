@@ -16,7 +16,10 @@
 #     skipping (no spike-skip path in axolotl). LOSS: Cut Cross Entropy here vs OLMo-core materialized CE
 #     (numerically ~equivalent).
 # Matching rowwise + FFN-only would require monkeypatching accelerate's torchao recipe — not done here.
-# Per axolotl, FP8 REQUIRES torch_compile + FSDP2 (both set). Pass CONTEXT_PARALLEL_SIZE>1 so 65536 fits.
+# FP8 needs FSDP2 (set) and strongly wants torch_compile for the scaled_mm fusion (set) — but compile is
+# NOT strictly required; it runs eager via torchao Float8Linear (slower). NOTE: compiling HF's RoPE hits a
+# cuBLAS ldb=0 error at long context on cu130 — set TORCH_COMPILE=false (run.sh) to run eager if it bites.
+# Pass CONTEXT_PARALLEL_SIZE>1 so 65536 fits.
 
 base_model: allenai/Olmo-3-7B-Think
 

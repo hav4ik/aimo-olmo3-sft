@@ -3,7 +3,8 @@
 # 2 epochs, fused AdamW; tune grad_accum so GBS ~= 4,194,304 tok. FP8 INTERNALS differ by design (same
 # limits as the 7B config — see olmo3-7b-fp8.yaml header): TENSORWISE only (OLMo-core runs ROWWISE on H200,
 # tensorwise on sm_120), and FP8 on ALL linears (vs OLMo-core's FFN-only / attention+lm_head BF16) — each
-# framework at its best. Requires torch_compile + FSDP2; pass CONTEXT_PARALLEL_SIZE>1 for 65536. MODEL_SIZE=32b
+# framework at its best. Needs FSDP2; wants torch_compile (not required — TORCH_COMPILE=false runs eager
+# if the cu130 RoPE/cuBLAS compile error bites, see 7b-fp8 header). CONTEXT_PARALLEL_SIZE>1 for 65536. MODEL_SIZE=32b
 # PRECISION=fp8. NOTE: axolotl has no bf16-optimizer-state / budget-AC equivalent — for the memory-bound
 # 32B it uses full (FSDP2-native) activation checkpointing + fp32 fused-AdamW states (heavier than OLMo-core's options).
 

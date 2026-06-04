@@ -42,6 +42,17 @@ CP_SIZE="${CONTEXT_PARALLEL_SIZE:-1}"
 CFG=/tmp/axolotl-config.yaml
 sed -e "s|__DATASET__|$DATASET_PATH|g" -e "s|__DATA_FILES__|$DATA_FILES|g" "$CONFIG" > "$CFG"
 
+# torch.compile toggle. FP8 wants compile for the scaled_mm fusion speedup, BUT compiling HF's RoPE
+# (an inv_freq @ position_ids outer product, k=1 + stride-0 broadcast) makes inductor emit a cuBLAS
+# Sgemm with ldb=0 at long context -> CUBLAS_STATUS_INVALID_VALUE. TORCH_COMPILE=false runs eager and
+# dodges it (bf16: ~free; fp8: still trains via torchao Float8Linear, just unfused/slower). Keep compile
+# but route gemms through Triton instead of cuBLAS to ALSO dodge it:
+#   -e TORCHINDUCTOR_MAX_AUTOTUNE_GEMM=1 -e TORCHINDUCTOR_MAX_AUTOTUNE_GEMM_BACKENDS=TRITON  (slow compile)
+if [ -n "${TORCH_COMPILE:-}" ]; then
+    sed -i "s|^torch_compile:.*|torch_compile: ${TORCH_COMPILE}|" "$CFG"
+    echo "[axolotl] torch_compile override -> ${TORCH_COMPILE}"
+fi
+
 OVERRIDES=(
     "--attn_implementation=$ATTN"
     "--output_dir=$DATA/checkpoints/olmo3-${MODEL_SIZE}-axolotl-$PRECISION"
