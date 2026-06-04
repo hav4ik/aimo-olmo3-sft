@@ -3,8 +3,8 @@
 # and runs training. With no FRAMEWORK set, drops to a shell — handy for first-run poking.
 # Env contract (all optional except a FRAMEWORK or EXPERIMENT to actually train):
 #   EXPERIMENT = <size>_<precision>_<variant>  e.g. 32b_fp8_cot — ONE knob that sets MODEL_SIZE,
-#                PRECISION, DATASET_NAME, DATASET_HF (see experiments.sh). Defaults FRAMEWORK=olmocore.
-#   FRAMEWORK = olmocore | axolotl
+#                PRECISION, DATASET_NAME, DATASET_HF (see experiments.sh).
+#   FRAMEWORK = olmocore | axolotl    (rarely needed — defaults to the IMAGE's baked SFT_FRAMEWORK)
 #   MODEL_SIZE = 7b | 32b             (olmocore; default 7b)
 #   PRECISION = bf16 | fp8            (default bf16)
 #   STAGE     = train | convert       (olmocore only; convert = HF->OLMo-core checkpoint)
@@ -28,12 +28,16 @@ if [ -n "${EXPERIMENT:-}" ]; then
     source "$CODE_ROOT/experiments.sh"
     resolve_experiment "$EXPERIMENT" || exit 2
 fi
-echo "[entrypoint] EXPERIMENT=${EXPERIMENT:-<none>} FRAMEWORK=${FRAMEWORK:-olmocore} MODEL_SIZE=${MODEL_SIZE:-7b} PRECISION=${PRECISION:-bf16} STAGE=${STAGE:-train}"
+# Framework = the IMAGE's baked identity (SFT_FRAMEWORK, set in each deploy Dockerfile), so you never
+# pass FRAMEWORK — the olmocore image runs olmocore, the axolotl image runs axolotl. An explicit
+# FRAMEWORK env still wins. Back-compat: images built before the marker fall back to olmocore.
+FW="${FRAMEWORK:-${SFT_FRAMEWORK:-}}"
+[ -z "$FW" ] && [ -n "${EXPERIMENT:-}" ] && FW=olmocore
+echo "[entrypoint] EXPERIMENT=${EXPERIMENT:-<none>} FRAMEWORK=${FW:-<none>} MODEL_SIZE=${MODEL_SIZE:-7b} PRECISION=${PRECISION:-bf16} STAGE=${STAGE:-train}"
 
-DEFAULT_FW=""; [ -n "${EXPERIMENT:-}" ] && DEFAULT_FW=olmocore
-case "${FRAMEWORK:-$DEFAULT_FW}" in
+case "$FW" in
     olmocore) exec bash "$CODE_ROOT/olmocore/run.sh" "$@" ;;
     axolotl)  exec bash "$CODE_ROOT/axolotl/run.sh"  "$@" ;;
-    "") echo "[entrypoint] No EXPERIMENT/FRAMEWORK set -> shell. Set EXPERIMENT=<size>_<prec>_<variant> or FRAMEWORK=olmocore|axolotl."; exec bash ;;
-    *)  echo "[entrypoint] Unknown FRAMEWORK='${FRAMEWORK}' (want olmocore|axolotl)"; exit 2 ;;
+    "") echo "[entrypoint] No framework -> shell. (Image should bake SFT_FRAMEWORK; or set FRAMEWORK=olmocore|axolotl.)"; exec bash ;;
+    *)  echo "[entrypoint] Unknown FRAMEWORK='${FW}' (want olmocore|axolotl)"; exit 2 ;;
 esac

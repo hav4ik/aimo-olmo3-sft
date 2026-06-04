@@ -28,7 +28,8 @@ RUN . /workspace/axolotl-venv/bin/activate \
 ENV CODE_REPO=https://github.com/hav4ik/aimo-olmo3-sft \
     CODE_BRANCH=olmo3-sft \
     CODE_DIR=/data/training/code \
-    HF_HOME=/data/training/hf_cache
+    HF_HOME=/data/training/hf_cache \
+    SFT_FRAMEWORK=axolotl
 WORKDIR /workspace
 # Override the base image's uv-entrypoint; axolotl/run.sh sources the venv itself.
 ENTRYPOINT ["/usr/local/bin/bootstrap.sh"]

@@ -35,6 +35,7 @@ RUN pip install --no-cache-dir "ring-flash-attn>=0.1.7" \
 ENV CODE_REPO=https://github.com/hav4ik/aimo-olmo3-sft \
     CODE_BRANCH=olmo3-sft \
     CODE_DIR=/data/training/code \
-    HF_HOME=/data/training/hf_cache
+    HF_HOME=/data/training/hf_cache \
+    SFT_FRAMEWORK=olmocore
 WORKDIR /workspace
 ENTRYPOINT ["/usr/local/bin/bootstrap.sh"]
