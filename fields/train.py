@@ -144,9 +144,9 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                    help="Max sequence length (0 => recipe default = 65536).")
     p.add_argument("--rank-microbatch-tokens", "--rank_microbatch_tokens", dest="rank_microbatch_tokens",
                    type=int, default=0,
-                   help="ADVANCED: per-DP-rank microbatch in TOKENS — MUST be a multiple of seq_len (per-GPU "
-                        "tokens = this / cp_degree). 0 => olmo-core auto-derives (one sequence/rank). Raise to "
-                        "pack more sequences per microstep and spend spare VRAM on throughput.")
+                   help="ADVANCED: per-DP-rank microbatch in TOKENS — MUST be a multiple of seq_len. 0 => "
+                        "olmo-core auto (one sequence/rank). NOTE: with context parallelism + intra-document "
+                        "masking (our 65536 SFT) it MUST stay at 1x seq_len; to use spare VRAM raise --olmo-ac-budget.")
     p.add_argument("--max-steps", "--max_steps", dest="max_steps", type=int, default=0,
                    help="Cap training at N steps (0 => use epochs).")
 
@@ -477,9 +477,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     # multiple of seq_len if set — fail early with a clear message rather than mid-training.
     cp = cp_degree(seq_len)
     rank_microbatch = args.rank_microbatch_tokens or seq_len  # auto = 1 sequence/rank
-    if args.rank_microbatch_tokens and args.rank_microbatch_tokens % seq_len != 0:
-        raise ValueError(f"--rank-microbatch-tokens ({args.rank_microbatch_tokens}) must be a multiple of "
-                         f"seq_len ({seq_len}) — olmo-core requires it.")
+    if args.rank_microbatch_tokens:
+        if args.rank_microbatch_tokens % seq_len != 0:
+            raise ValueError(f"--rank-microbatch-tokens ({args.rank_microbatch_tokens}) must be a multiple of "
+                             f"seq_len ({seq_len}) — olmo-core requires it.")
+        if cp > 1 and args.rank_microbatch_tokens > seq_len:
+            raise ValueError(
+                f"--rank-microbatch-tokens ({args.rank_microbatch_tokens}) = "
+                f"{args.rank_microbatch_tokens // seq_len} sequences/rank, but context parallelism (cp={cp}, "
+                f"auto-engaged at seq_len {seq_len}) + intra-document masking requires exactly ONE sequence/rank. "
+                f"Leave it unset (= {seq_len}); raise --olmo-ac-budget toward 1.0 to spend spare VRAM on throughput.")
     rmb = (f"{args.rank_microbatch_tokens} tok ({args.rank_microbatch_tokens // seq_len} seq/rank, "
            f"~{args.rank_microbatch_tokens // cp} tok/GPU)" if args.rank_microbatch_tokens
            else f"auto (1 seq/rank, ~{seq_len // cp} tok/GPU)")
