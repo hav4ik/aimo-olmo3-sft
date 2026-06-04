@@ -1,18 +1,22 @@
-# Olmo 3 7B SFT — AXOLOTL / FP8 (the precision-experiment arm)
+# Olmo 3 7B SFT — AXOLOTL / FP8, matched to the OLMo-core FP8 recipe as closely as axolotl allows.
 #
-# IDENTICAL to olmo3-7b-bf16.yaml except the fp8 block below — same data, seed,
-# recipe, shapes, compile — so the BF16-vs-FP8 loss delta isolates precision.
+# RECIPE-LEVEL params match OLMo-core exactly: seq 65536, LR 5e-5, betas (0.9,0.95), wd 0, grad-norm 1.0,
+# linear warmup 0.03 -> 0, 2 epochs, fused AdamW. Tune grad_accum so GBS ~= 1,048,576 tok (see note below).
 #
-# axolotl FP8 = accelerate + torchao float8, TENSORWISE e4m3 (comparable to the
-# OLMo-core OLMO_FP8=tensorwise arm). NOTE two real asymmetries vs OLMo-core, worth
-# keeping in mind when reading the stability curves:
-#   - axolotl's FP8 module selection is accelerate-managed (skips non-divisible-by-16
-#     dims); it does NOT do OLMo-core's explicit "keep full-attention blocks + lm_head
-#     in high precision" exclusion. So this arm FP8s more of the model — if it's less
-#     stable than OLMo-core's FP8, sensitive-layer exclusion is the likely reason.
-#   - FP8 here is float8 on the LINEARS only (we do NOT enable fp8 attention).
-# Per axolotl, FP8 REQUIRES torch_compile (scaling overhead dominates without graph
-# fusion) and FSDP2 (already set). Validate the BF16 arm first, then this.
+# FP8 INTERNALS axolotl CANNOT match — it exposes only `fp8` + `fp8_enable_fsdp_float8_all_gather` and
+# routes through accelerate's torchao integration, so these OLMo-core FP8 choices are NOT reachable here:
+#   - SCALING: axolotl = TENSORWISE e4m3 only. OLMo-core now defaults ROWWISE on H200 (sm_90) / tensorwise
+#     on sm_120. => this arm matches OLMo-core's *tensorwise* path (OLMO_FP8=tensorwise / the RTX-6000
+#     config), NOT the H200 ROWWISE production recipe. For an apples-to-apples A/B, run OLMo-core with
+#     OLMO_FP8=tensorwise; do NOT compare this against rowwise.
+#   - MODULE FILTER: axolotl FP8s ALL linears (accelerate skips lm_head + non-/16 dims). OLMo-core keeps
+#     attention q/k/v/o + lm_head + embeddings in BF16 (DeepSeek recipe) and FP8s only the FFN. So this arm
+#     quantizes MORE of the model — if it's less stable, the un-excluded attention is the likely cause.
+#   - OPTIMIZER: fused AdamW here == OLMo-core's fused_adamw; for stable SFT == SkipStepAdamW when not
+#     skipping (no spike-skip path in axolotl). LOSS: Cut Cross Entropy here vs OLMo-core materialized CE
+#     (numerically ~equivalent).
+# Matching rowwise + FFN-only would require monkeypatching accelerate's torchao recipe — not done here.
+# Per axolotl, FP8 REQUIRES torch_compile + FSDP2 (both set). Pass CONTEXT_PARALLEL_SIZE>1 so 65536 fits.
 
 base_model: allenai/Olmo-3-7B-Think
 
@@ -32,7 +36,7 @@ datasets:
 dataset_prepared_path: /data/last_run_prepared
 val_set_size: 0.0
 
-sequence_len: 32768
+sequence_len: 65536          # match OLMo-core (no truncation; non-negotiable). Needs CONTEXT_PARALLEL_SIZE>1.
 sample_packing: true
 pad_to_sequence_len: true
 
@@ -64,6 +68,9 @@ gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
 
+# GBS = micro_batch × grad_accum × dp_world × seq_len; match OLMo-core's ~1,048,576 tok (=16 seqs of 65536).
+# So set grad_accum × dp_world = 16: e.g. 8 GPUs / CP=2 -> dp_world=4 -> grad_accum=4 (as below);
+# 4 GPUs / CP=2 -> dp_world=2 -> grad_accum=8. Adjust per launch topology to hit 1M.
 micro_batch_size: 1
 gradient_accumulation_steps: 4
 

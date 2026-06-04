@@ -35,7 +35,7 @@ datasets:
 dataset_prepared_path: /data/last_run_prepared
 val_set_size: 0.0
 
-sequence_len: 32768          # recipe seq len
+sequence_len: 65536          # match OLMo-core (no truncation). Needs CONTEXT_PARALLEL_SIZE>1.
 sample_packing: true
 pad_to_sequence_len: true    # fixed shape -> torch.compile doesn't recompile per batch
 

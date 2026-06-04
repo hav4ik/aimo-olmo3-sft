@@ -1,8 +1,11 @@
-# Olmo 3 32B SFT — AXOLOTL / FP8. IDENTICAL to olmo3-32b-bf16.yaml except the fp8 block, so the
-# BF16-vs-FP8 delta isolates precision. axolotl FP8 = accelerate + torchao TENSORWISE e4m3 (no
-# granularity / module-exclusion control — coarser than OLMo-core's rowwise + all-attention-BF16;
-# if it's less stable, that's why). FP8 on the LINEARS only (no fp8 attention). Requires
-# torch_compile + FSDP2. Select with MODEL_SIZE=32b PRECISION=fp8. Validate the BF16 arm first.
+# Olmo 3 32B SFT — AXOLOTL / FP8, matched to OLMo-core's FP8 recipe as closely as axolotl allows.
+# Recipe-level matches OLMo-core: seq 65536, LR 1e-4, betas (0.9,0.95), wd 0, grad-norm 1.0, warmup 0.03->0,
+# 2 epochs, fused AdamW; tune grad_accum so GBS ~= 4,194,304 tok. FP8 INTERNALS axolotl can't match (same
+# limits as the 7B config — see olmo3-7b-fp8.yaml header): TENSORWISE only (vs OLMo-core's H200 ROWWISE;
+# this matches OLMO_FP8=tensorwise), and FP8 on ALL linears (vs OLMo-core's FFN-only / attention+lm_head
+# BF16). Requires torch_compile + FSDP2; pass CONTEXT_PARALLEL_SIZE>1 for 65536. Select MODEL_SIZE=32b
+# PRECISION=fp8. NOTE: axolotl has no bf16-optimizer-state / budget-AC equivalent — for the memory-bound
+# 32B it uses full gradient_checkpointing + fp32 fused-AdamW states (heavier than OLMo-core's options).
 
 base_model: allenai/Olmo-3.1-32B-Think
 
@@ -21,7 +24,7 @@ datasets:
 dataset_prepared_path: /data/last_run_prepared
 val_set_size: 0.0
 
-sequence_len: 32768
+sequence_len: 65536          # match OLMo-core (no truncation). Needs CONTEXT_PARALLEL_SIZE>1 to fit.
 sample_packing: true
 pad_to_sequence_len: true
 
@@ -51,8 +54,8 @@ gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
 
-# 32B recipe batch = 4,194,304 tok = 128 seqs @ seq 32768 (4x the 7B). 32 GPUs -> accum 4;
-# 64 -> accum 2; 16 -> accum 8.
+# 32B recipe GBS = 4,194,304 tok = 64 seqs @ seq 65536 (4x the 7B). Set grad_accum × dp_world = 64:
+# e.g. 64 GPUs / CP=4 -> dp_world=16 -> grad_accum=4; 32 GPUs / CP=4 -> dp_world=8 -> grad_accum=8.
 micro_batch_size: 1
 gradient_accumulation_steps: 4
 
