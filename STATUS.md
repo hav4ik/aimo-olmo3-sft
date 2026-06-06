@@ -14,8 +14,8 @@ network fetches are the HF base model + dataset, and the HF checkpoint upload). 
 - FA2 **allsm** coverage — `sm_80;86;90;100;120` via the grafted flash-attn 2.8.1 wheel (runs on A100,
   H100/H200, B200, RTX PRO 6000, and RTX 3090). Recipe: `docker/base/Dockerfile.fa2-allsm`.
 - `KeepLastNCheckpoints` async-save fix + `--keep-last` default 2; the 1B local write-correctness path.
-- Built from `olmo-core-sft:cu130-allsm`. The local `.sif` (`olmo-sft-v2-sm86.sif`, name predates the
-  `allsm` rename) is the SAME image + baked `fields/SECRETS.json` (for credential-free local runs); the
+- Built from `olmo-core-sft:cu130-allsm`. The local `.sif` (`olmo-sft-v2-allsm.sif`) is the SAME image
+  + baked `fields/SECRETS.json` (for credential-free local runs); the
   pushed docker image is clean (`.example` only). Both = `sha256:651a7f1c…`.
 - Verified stable: server 7B fp8, and locally 1B on 2× 3090 (the `allsm` flash path).
 

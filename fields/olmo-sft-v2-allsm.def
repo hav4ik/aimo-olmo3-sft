@@ -1,6 +1,6 @@
 # Singularity/Apptainer definition for the Fields Model submission image.
 #
-# Bootstraps from the LOCAL docker image (chankhavu/olmo3-sft-v2:cu130-sm86) and bakes the real
+# Bootstraps from the LOCAL docker image (chankhavu/olmo3-sft-v2:cu130-allsm) and bakes the real
 # credentials (fields/SECRETS.json) into /app/SECRETS.json so the container needs no `-e` on the
 # NII/ABCI Singularity cluster. The docker image itself is pushed WITHOUT secrets; the secrets live
 # ONLY in this locally-built .sif — never push this .sif to a shared/public registry.
@@ -22,7 +22,7 @@
 # override needed (omitting them preserves the docker-image values).
 
 Bootstrap: docker-daemon
-From: chankhavu/olmo3-sft-v2:cu130-sm86
+From: chankhavu/olmo3-sft-v2:cu130-allsm
 
 %files
     # Bake real credentials into the .sif (HF_TOKEN + WANDB_API_KEY). secrets_loader reads
@@ -35,7 +35,7 @@ From: chankhavu/olmo3-sft-v2:cu130-sm86
 
 %labels
     org.fields.entrypoint /app/train.py
-    org.fields.base chankhavu/olmo3-sft-v2:cu130-sm86
+    org.fields.base chankhavu/olmo3-sft-v2:cu130-allsm
     org.fields.secrets baked
 
 %help
