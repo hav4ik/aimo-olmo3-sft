@@ -328,11 +328,21 @@ class KeepLastNCheckpoints(Callback):
     save_interval: int = 1000
     _persistent: List[str] = field(default_factory=list)
 
-    def _is_persistent(self) -> bool:
-        if self.save_interval > 0 and self.step % self.save_interval == 0:
-            return True
-        max_steps = getattr(self.trainer, "max_steps", None)  # the sync end-of-training checkpoint
-        return max_steps is not None and self.step == max_steps
+    def _persistent_step(self, path) -> Optional[int]:
+        """The step if `path` is a PERSISTENT checkpoint, else None — derived from the checkpoint
+        DIRECTORY NAME (step<N>), NOT self.step. Checkpoint saves are async by default
+        (save_async=backend_supports_cpu()), so post_checkpoint_saved fires from the save future's
+        done-callback LONG after self.step (==trainer.global_step) has advanced past the save_interval
+        boundary. Keying retention off self.step would (almost) never match a persistent step, so
+        persistent checkpoints would never be tracked or pruned and would accumulate unbounded."""
+        name = str(path).rstrip("/").split("/")[-1]
+        if not (name.startswith("step") and name[4:].isdigit()):
+            return None
+        step = int(name[4:])
+        if self.save_interval > 0 and step % self.save_interval == 0:
+            return step
+        max_steps = getattr(self.trainer, "max_steps", None)  # the end-of-training checkpoint
+        return step if (max_steps is not None and step == max_steps) else None
 
     def pre_train(self):
         if self.keep_last <= 0:
@@ -350,8 +360,8 @@ class KeepLastNCheckpoints(Callback):
             log.warning(f"[retention] could not scan existing checkpoints: {e}")
 
     def post_checkpoint_saved(self, path):
-        if self.keep_last <= 0 or not self._is_persistent():
-            return
+        if self.keep_last <= 0 or self._persistent_step(path) is None:
+            return  # ephemeral / unrecognized -> olmo-core's CheckpointerCallback manages those
         self._persistent.append(str(path))
         while len(self._persistent) > self.keep_last:
             old = self._persistent.pop(0)
