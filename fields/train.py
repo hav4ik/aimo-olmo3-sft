@@ -35,7 +35,6 @@ import dataclasses
 import logging
 import os
 import re
-import signal
 import subprocess
 import sys
 import threading
@@ -470,68 +469,35 @@ def open_setup_wandb(args: argparse.Namespace, recipe: Recipe, final_name: str, 
         return None
 
 
-# Set by the SIGINT/SIGTERM handler in stream_run_sh so main can skip the final upload on a deliberate abort.
-_interrupted = threading.Event()
-
-
 def stream_run_sh(cmd: list[str], env: dict[str, str], cwd: Path, log_path: Path, wb) -> int:
-    """Run run.sh, tee its output to console + <logdir>/run.log, and (if wb) update the run summary on setup
-    markers. The training tree runs in its OWN session (start_new_session) and train.py is the sole signal
-    owner: the FIRST Ctrl+C / SIGTERM is forwarded once for a graceful shutdown (olmo-core finishes the step
-    + saves, then exits); a SECOND force-kills the whole tree. This stops the messy 3-way signal fight
-    (terminal -> train.py + torchrun + every worker) that made Ctrl+C look hung."""
+    """Run run.sh, tee its output to console + <logdir>/run.log, and (if wb) update the run summary on
+    setup markers — finishing the run at the training-launch marker so the worker can resume it."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     t0 = time.monotonic()
     active = wb is not None
     log.info("exec: %s", " ".join(cmd))
     proc = subprocess.Popen(cmd, env=env, cwd=str(cwd), stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
-
-    def _on_signal(signum, _frame):
-        first = not _interrupted.is_set()
-        _interrupted.set()
-        try:
-            if first:
-                log.warning("interrupt (%s) received — shutting training down gracefully; "
-                            "press Ctrl+C again to FORCE-KILL", signal.Signals(signum).name)
-                os.killpg(proc.pid, signal.SIGINT)    # proc is its own group leader (start_new_session)
-            else:
-                log.warning("second interrupt — force-killing the training tree (SIGKILL)")
-                os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-
-    prev = {s: signal.signal(s, _on_signal) for s in (signal.SIGINT, signal.SIGTERM)}
-    try:
-        with open(log_path, "a") as lf:
-            for line in proc.stdout:  # type: ignore[union-attr]
-                sys.stdout.write(line)
-                sys.stdout.flush()
-                lf.write(line)
-                if active:
-                    try:
-                        for sub, phase in SETUP_MARKERS:
-                            if sub in line:
-                                wb.summary[f"setup/{phase}_at_sec"] = round(time.monotonic() - t0, 1)
-                                wb.summary["setup/phase"] = phase
-                        if TRAIN_LAUNCH_MARKER in line:
-                            wb.summary["setup/total_sec"] = round(time.monotonic() - t0, 1)
-                            wb.summary["setup/phase"] = "training"
-                            wb.finish()        # hand off: the rank-0 worker resumes this run id
-                            active = False
-                    except Exception as exc:  # noqa: BLE001
-                        log.warning("W&B setup logging error (%s); dropping early logging", exc)
+                            stderr=subprocess.STDOUT, text=True, bufsize=1)
+    with open(log_path, "a") as lf:
+        for line in proc.stdout:  # type: ignore[union-attr]
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            lf.write(line)
+            if active:
+                try:
+                    for sub, phase in SETUP_MARKERS:
+                        if sub in line:
+                            wb.summary[f"setup/{phase}_at_sec"] = round(time.monotonic() - t0, 1)
+                            wb.summary["setup/phase"] = phase
+                    if TRAIN_LAUNCH_MARKER in line:
+                        wb.summary["setup/total_sec"] = round(time.monotonic() - t0, 1)
+                        wb.summary["setup/phase"] = "training"
+                        wb.finish()        # hand off: the rank-0 worker resumes this run id
                         active = False
-        proc.wait()
-    finally:
-        for s, h in prev.items():
-            signal.signal(s, h)
-        if proc.poll() is None:        # never orphan the training tree (it's in its own session)
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            proc.wait()
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("W&B setup logging error (%s); dropping early logging", exc)
+                    active = False
+    proc.wait()
     if active:  # run.sh exited before training started (e.g. a setup crash) — close the run cleanly
         try:
             wb.summary["setup/phase"] = "failed_before_training"
@@ -702,16 +668,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         rc = stream_run_sh(["bash", str(run_sh)], env, code_root, logdir / "run.log", wb)
     finally:
         if watcher is not None:
-            # Stop the watcher. Normally its uploads self-terminate within upload_timeout so this join is
-            # bounded; on a deliberate interrupt we don't wait for an in-flight upload (the daemon dies at exit).
+            # Stop the watcher. Its uploads self-terminate within upload_timeout, so this join is BOUNDED
+            # (can't hang) and guarantees no watcher convert is still running when the final convert starts.
             stop_watcher.set()
-            watcher.join(timeout=15 if _interrupted.is_set() else upload_timeout + 300)
-
-    if _interrupted.is_set():
-        log.warning("run interrupted — exiting without a final upload. The watcher already shipped "
-                    "intermediate checkpoints; to ship the latest by hand: python /app/upload.py --final "
-                    "--output %s", output)
-        return 130
+            watcher.join(timeout=upload_timeout + 300)
 
     elapsed_min = (time.monotonic() - t0) / 60.0
     if rc == 0:
