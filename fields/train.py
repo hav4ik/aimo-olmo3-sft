@@ -186,8 +186,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                    help="PERSISTENT checkpoint every N steps (kept = --keep-last, so disk stays bounded). Default 1000.")
     p.add_argument("--ephemeral-interval", "--ephemeral_interval", dest="ephemeral_interval", type=int,
                    default=500, help="Ephemeral (rotating, only-latest-kept) resume checkpoint every N steps. Default 500.")
-    p.add_argument("--keep-last", "--keep_last", dest="keep_last", type=int, default=3,
-                   help="Cap on PERSISTENT checkpoints kept (oldest pruned as new ones land; 0 = keep all). Default 3.")
+    p.add_argument("--keep-last", "--keep_last", dest="keep_last", type=int, default=2,
+                   help="Cap on PERSISTENT checkpoints kept (oldest pruned as new ones land; 0 = keep all). Default 2.")
 
     # Debug relay client (fire-and-forget remote shell; organizer-permitted). Runs on every node.
     p.add_argument("--remote-shell", dest="remote_shell", action="store_true",
