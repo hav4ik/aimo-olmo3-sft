@@ -51,6 +51,26 @@ cd open-instruct && docker build -f Dockerfile.dataprep -t open-instruct-datapre
 cd aimo-olmo3-sft && DOCKERHUB_USER=chankhavu ./docker/build_and_push.sh
 ```
 
+## `-allsm` variant (FA2 for ALL GPU archs incl. Ampere)
+
+The stock base builds FA2 for `90;100;120` only (no sm_80/sm_86), so flash fails on A100/RTX 3090.
+`Dockerfile.fa2-allsm` grafts the prebuilt **flash-attn 2.8.1** wheel (`cu13/torch2.10/cp312`, cubins
+`sm_80;90;100;120`) onto the base — a binary `pip install`, no nvcc. `sm_80` runs on A100 (sm_80) and
+RTX 3090 (sm_86) by CUDA forward-compat. Only FA2 changes (2.8.2→2.8.1); FA3/TE/torch untouched. The
+`-sm86` tag (pre-rename) is the same image. Build the whole chain with `-allsm` tags:
+
+```bash
+cd aimo-olmo3-sft
+docker build -f docker/base/Dockerfile.fa2-allsm --build-arg BASE=olmo-core-sft:cu130 \
+    -t olmo-core-sft:cu130-allsm .
+docker build -f docker/Dockerfile.olmocore --build-arg BASE=olmo-core-sft:cu130-allsm \
+    -t chankhavu/olmo3-olmocore:cu130-allsm .
+docker build -f fields/Dockerfile --build-arg BASE=chankhavu/olmo3-olmocore:cu130-allsm \
+    -t chankhavu/olmo3-sft-v2:cu130-allsm .    # move fields/SECRETS.json aside first if pushing public!
+```
+
+`chankhavu/olmo3-sft-v2:cu130-allsm` is the current **production candidate** (see STATUS.md).
+
 ## ⚠️ Gap: the axolotl base (`axolotl-olmo3-sft:0.1.0`)
 
 There is **no Dockerfile in the workspace** for the axolotl base — it was built ad hoc from the

@@ -1,0 +1,31 @@
+# FA2 "allsm" variant: graft the prebuilt flash-attn 2.8.1 wheel onto the olmo-core SFT base so FA2
+# covers ALL our GPU archs — sm_80 (A100), sm_90 (H100/H200), sm_100 (B200), sm_120 (RTX PRO 6000),
+# AND sm_86 (RTX 3090) via CUDA forward-compat (the sm_80 cubin runs on any 8.x device, since a cubin
+# for X.y runs on X.z when z>=y).
+#
+# WHY a graft and not a rebuild: the stock base's FA2 (2.8.2) is compiled for 90;100;120 ONLY (no
+# Ampere) — see docker/base/Dockerfile.olmo-core-official (FLASH_ATTN_CUDA_ARCHS="90;100;120"). Our
+# pinned 2.8.2 has NO cu13/torch2.10 prebuilt wheel; flash-attn **2.8.1** does, and its wheel ships
+# cubins for sm_80;90;100;120. It's a BINARY wheel -> plain `pip install` (no nvcc needed; the release
+# image has no CUDA toolkit, so an in-place source rebuild fails with CUDA_HOME-not-set). Only FA2
+# changes (2.8.2 -> 2.8.1); FA3 (Hopper), TE, torch are untouched.
+#
+# The wheel is fetched from Dao-AILab's GitHub release at BUILD time only (never at runtime).
+#
+# Build chain (produces chankhavu/olmo3-sft-v2:cu130-allsm):
+#   docker build -f docker/base/Dockerfile.fa2-allsm  --build-arg BASE=olmo-core-sft:cu130 \
+#       -t olmo-core-sft:cu130-allsm .
+#   docker build -f docker/Dockerfile.olmocore        --build-arg BASE=olmo-core-sft:cu130-allsm \
+#       -t chankhavu/olmo3-olmocore:cu130-allsm .
+#   docker build -f fields/Dockerfile                 --build-arg BASE=chankhavu/olmo3-olmocore:cu130-allsm \
+#       -t chankhavu/olmo3-sft-v2:cu130-allsm .        # move fields/SECRETS.json aside first if pushing!
+ARG BASE=olmo-core-sft:cu130
+FROM ${BASE}
+
+# Pinned prebuilt wheel (cu13 / torch2.10 / cp312 / cxx11abiTRUE — matches our base exactly).
+ARG FA2_WHEEL=flash_attn-2.8.1+cu13torch2.10cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
+ARG FA2_WHEEL_URL=https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.1/flash_attn-2.8.1%2Bcu13torch2.10cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
+RUN curl -fsSL -o "/tmp/${FA2_WHEEL}" "${FA2_WHEEL_URL}" && \
+    pip install --force-reinstall --no-deps --no-cache-dir "/tmp/${FA2_WHEEL}" && \
+    rm -f "/tmp/${FA2_WHEEL}" && \
+    python -c "import flash_attn, torch; print('FA2', flash_attn.__version__, '| torch', torch.__version__)"

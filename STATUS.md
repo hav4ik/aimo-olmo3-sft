@@ -4,6 +4,21 @@ Branch `olmo3-sft`. Two deploy images: `chankhavu/olmo3-olmocore:cu130` (12 GB) 
 `chankhavu/olmo3-axolotl:cu130` (19.8 GB). Both rebuilt locally this session; **not yet pushed**.
 Several git commits **ahead of origin** — needs `git push origin olmo3-sft`.
 
+## ⭐ Production candidate (fields submission image) — 2026-06-06
+
+`chankhavu/olmo3-sft-v2:cu130-allsm` is the current **production candidate** for the NII/ABCI submission
+(branch `olmo-sft-32b`, NOT the older `olmo3-sft` clone-at-runtime deploy images described below). It is
+the **fields** image: ENTRYPOINT `python /app/train.py`, and the code is **BAKED** at `/app` + `/app/code`
+— it does NOT clone from GitHub at runtime (`--pull-code` is opt-in and OFF by default; the only runtime
+network fetches are the HF base model + dataset, and the HF checkpoint upload). Contents:
+- FA2 **allsm** coverage — `sm_80;86;90;100;120` via the grafted flash-attn 2.8.1 wheel (runs on A100,
+  H100/H200, B200, RTX PRO 6000, and RTX 3090). Recipe: `docker/base/Dockerfile.fa2-allsm`.
+- `KeepLastNCheckpoints` async-save fix + `--keep-last` default 2; the 1B local write-correctness path.
+- Built from `olmo-core-sft:cu130-allsm`. The local `.sif` (`olmo-sft-v2-sm86.sif`, name predates the
+  `allsm` rename) is the SAME image + baked `fields/SECRETS.json` (for credential-free local runs); the
+  pushed docker image is clean (`.example` only). Both = `sha256:651a7f1c…`.
+- Verified stable: server 7B fp8, and locally 1B on 2× 3090 (the `allsm` flash path).
+
 ## Launch interface (both frameworks)
 
 One knob: **`EXPERIMENT=<size>_<precision>_<variant>`** (e.g. `7b_bf16_cot`, `32b_fp8_cot`).
