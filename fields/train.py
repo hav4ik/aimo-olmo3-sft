@@ -51,7 +51,9 @@ except ImportError:  # keep train.py runnable even if the loader is absent
 # --------------------------------------------------------------------------------------------------
 # Constants
 # --------------------------------------------------------------------------------------------------
-# Baked copy of THIS repo's code (run.sh + sft_scripts), used when --code_repo is empty / clone fails.
+# Baked copy of THIS repo's code (run.sh + sft_scripts). BAKED IS THE DEFAULT — the runtime NEVER pulls
+# from GitHub (that's fragile: network + branch deps); only the model weights + dataset are downloaded at
+# runtime. Opt into a GitHub pull for dev iteration with --pull-code (or --code_repo <url>).
 BAKED_CODE_ROOT = Path(os.environ.get("FIELDS_CODE_ROOT", "/app/code"))
 
 # The deterministic identity train.py pins so it can locate the trained checkpoint afterwards.
@@ -59,8 +61,8 @@ RUN_USER = "fields"  # -> save_folder = {OLMO_SFT_SAVE_ROOT}/checkpoints/{RUN_US
 BAKED_HF_HOME = "/tmp/olmo-sft/hf_cache"  # baked default (under /tmp, the always-bound dir); relocated under --workdir at runtime
 DEFAULT_DATASET_REPO = "chankhavu/smolmo-proofs-cot-sft"
 DEFAULT_DATASET_SUBDIR = "olmocore"
-DEFAULT_CODE_REPO = "https://github.com/hav4ik/aimo-olmo3-sft"
-DEFAULT_CODE_REF = "olmo3-sft"
+DEFAULT_CODE_REPO_URL = "https://github.com/hav4ik/aimo-olmo3-sft"  # ONLY used when --pull-code is passed
+DEFAULT_CODE_REF = os.environ.get("FIELDS_CODE_REF", "olmo-sft-32b")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -208,8 +210,13 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     # Sources (override the defaults if you host the artifacts elsewhere).
     p.add_argument("--dataset_repo", default=DEFAULT_DATASET_REPO, help="HF dataset repo to download when --dataset_path is unset.")
     p.add_argument("--dataset_subdir", default=DEFAULT_DATASET_SUBDIR, help="Subdir in the dataset repo holding the .npy.")
-    p.add_argument("--code_repo", default=DEFAULT_CODE_REPO, help="Code repo to clone (empty => use baked /app/code).")
-    p.add_argument("--code_ref", default=DEFAULT_CODE_REF, help="Code branch/tag/commit.")
+    p.add_argument("--pull-code", dest="pull_code", action="store_true",
+                   default=os.environ.get("FIELDS_PULL_CODE", "0").lower() in ("1", "true", "yes"),
+                   help="Pull code from GitHub at runtime (dev iteration). Default OFF — the image's baked "
+                        "/app/code is used. Runtime pulls are fragile (network/branch deps).")
+    p.add_argument("--code_repo", default=os.environ.get("FIELDS_CODE_REPO", ""),
+                   help="Override the code repo URL to pull from (non-empty implies pulling). Empty => baked /app/code.")
+    p.add_argument("--code_ref", default=DEFAULT_CODE_REF, help="Branch/tag/commit to pull (with --pull-code / --code_repo).")
     return p.parse_args(argv)
 
 
@@ -611,7 +618,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     log.info("batching | global=%d tok | seq_len=%d | cp_degree~%d | rank_microbatch=%s | ac_budget=%s",
              args.global_batch_tokens, seq_len, cp, rmb, args.olmo_ac_budget)
 
-    code_root = stage_code(args.code_repo, args.code_ref, workdir)
+    # Default: baked /app/code (no runtime GitHub pull). Pull only if explicitly opted in.
+    code_repo = args.code_repo or (DEFAULT_CODE_REPO_URL if args.pull_code else "")
+    code_root = stage_code(code_repo, args.code_ref, workdir)
     run_sh = code_root / "olmocore" / "run.sh"
     if not run_sh.is_file():
         raise FileNotFoundError(f"run.sh not found at {run_sh}")
