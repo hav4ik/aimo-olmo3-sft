@@ -341,6 +341,12 @@ def main(argv: Optional[list[str]] = None) -> int:
             log.info("latest checkpoint step%s already uploaded (%s present) — nothing new to ship",
                      already, UPLOAD_MARKER)
             return 0
+        except FileNotFoundError as exc:
+            # No checkpoint exists yet — the watcher polled before training saved one (e.g. still
+            # downloading/converting). Not an error for the watcher (clean skip); but the FINAL upload
+            # finding nothing IS notable, so surface a distinct non-zero code for that case.
+            log.info("nothing to upload yet: %s", exc)
+            return 3 if args.final else 0
         log.info("%scheckpoint: %s", "final " if args.final else "", checkpoint)
         convert_checkpoint(checkpoint, hf_model, args.seq_len, parse_size(args.shard_size))
 

@@ -401,6 +401,11 @@ def upload_watcher(output: Path, seq_len: int, interval: float, stop: threading.
     log.info("upload watcher started (poll every %ds, %.0fmin/upload cap, CPU-only, ships each new checkpoint)",
              int(interval), timeout / 60.0)
     while not stop.wait(interval):  # sleep first (no checkpoint exists at step 0), wake early on stop
+        # Stay completely silent until a checkpoint dir exists — during the long download/convert setup
+        # there's nothing to ship, and spawning upload.py just to have it say "nothing yet" is noise that
+        # can look alarming in the container log.
+        if not any(output.rglob("step*")):
+            continue
         try:
             run_upload(output, seq_len, cpu_only=True, quiet=True, timeout=timeout)
         except Exception as exc:  # noqa: BLE001
