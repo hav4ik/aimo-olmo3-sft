@@ -7,7 +7,7 @@ We ask NII to execute 2 experiments, described below: FP8 and BF16 training. The
 ## Requirements & what it does
 
 For each experiment the container, under the host dir bound to **`/tmp`**, **downloads** the base model
-[`allenai/Olmo-3-7B-Think`](https://huggingface.co/allenai/Olmo-3-7B-Think) (~15 GB) and the pre-tokenized dataset (~15 GB), runs SFT (1 epoch, 1M-token batches), and writes checkpoints. `train.py` then auto-runs `upload.py`, which converts the final checkpoint to HuggingFace safetensors and ships it.
+[`allenai/Olmo-3-7B-Think`](https://huggingface.co/allenai/Olmo-3-7B-Think) (~15 GB) and the pre-tokenized dataset (~15 GB), runs SFT (1 epoch, 1M-token batches), and writes checkpoints. `train.py` ships each new checkpoint to HuggingFace automatically, in parallel with training (see step 2).
 
 **Each of the 2 experiments needs:**
 - **GPUs:** one **8x H200** node (NVLink; ~141 GB/GPU). Auto-detects all visible GPUs.
@@ -53,7 +53,9 @@ singularity exec --nv --containall \
 
 ### 2. Convert + upload
 
-`train.py` runs this **automatically** when training finishes (node 0 only). To (re)run it by hand:
+`train.py` does this **automatically** (node 0): a background watcher ships **each new checkpoint as it lands**, in parallel with training (CPU-only conversion, so it never blocks the GPUs), plus a final upload when training ends. Each checkpoint goes to its **own** HF model repo named `chankhavu/olmo_<size>_<precision>[_<run-suffix>]_step<N>_<timestamp>` — so you can find or delete any checkpoint on its own. Already-uploaded checkpoints are skipped.
+
+To (re)run a convert+upload by hand (e.g. after a crash):
 
 ```bash
 singularity exec --nv --containall \
@@ -62,7 +64,7 @@ singularity exec --nv --containall \
   python /app/upload.py
 ```
 
-Picks the latest complete checkpoint, converts it to HuggingFace safetensors, and uploads to `chankhavu/<experiment>-<timestamp>` (skips it if already uploaded).
+Tune the watcher poll interval with `FIELDS_UPLOAD_WATCH_INTERVAL` (seconds, default 300); disable all uploads with `--no-upload`.
 
 ### Optional: explicit directories
 

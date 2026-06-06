@@ -192,24 +192,48 @@ def convert_checkpoint(checkpoint: Path, hf_out: Path, seq_len: int, shard_bytes
 # --------------------------------------------------------------------------------------------------
 # Upload
 # --------------------------------------------------------------------------------------------------
-def default_base_name(output: Path) -> str:
-    """Base repo name from the run's MANIFEST (the experiment), else a safe default."""
+def manifest_fields(output: Path) -> dict:
+    """Parse MANIFEST.txt (key=value per line) that train.py writes into the output dir."""
+    fields: dict = {}
     try:
         for line in (output / "MANIFEST.txt").read_text().splitlines():
-            if line.startswith("experiment="):
-                return line.split("=", 1)[1].strip() or "olmo3-sft"
+            if "=" in line:
+                k, v = line.split("=", 1)
+                fields[k.strip()] = v.strip()
     except Exception:  # noqa: BLE001
         pass
-    return "olmo3-sft"
+    return fields
+
+
+def default_base_name(output: Path) -> str:
+    """Base repo name from the run's MANIFEST (the experiment), else a safe default."""
+    return manifest_fields(output).get("experiment") or "olmo3-sft"
+
+
+def checkpoint_repo_base(output: Path, checkpoint: Optional[Path], final: bool = False) -> str:
+    """Per-checkpoint repo base: ``olmo_<size>_<precision>[_<suffix>]_<step<N>|final>`` (size/precision/
+    run_suffix from MANIFEST.txt, step from the checkpoint dir) — so EACH checkpoint gets its own,
+    self-describing repo you can find or delete on its own. When `final`, the tail is ``final`` instead of
+    ``step<N>`` — the guaranteed end-of-run model. Falls back to the experiment name if the manifest is thin."""
+    f = manifest_fields(output)
+    size, prec, suffix = f.get("model_size", ""), f.get("precision", ""), f.get("run_suffix", "")
+    if not (size and prec):
+        return default_base_name(output)
+    parts = [p for p in ("olmo", size, prec, suffix) if p]
+    if final:
+        parts.append("final")
+    elif checkpoint is not None:
+        parts.append(f"step{_step_num(checkpoint)}")
+    return "_".join(parts)
 
 
 def hf_repo_id(base: str) -> str:
-    """Force the repo to <HF_NAMESPACE>/<base>-<YYYYMMDDHHMMSS>. Any namespace the caller put in `base`
+    """Force the repo to <HF_NAMESPACE>/<base>_<YYYYMMDDHHMMSS>. Any namespace the caller put in `base`
     is stripped (we keep only the last path segment), so the upload always lands in OUR namespace with a
     unique, non-colliding name."""
     name = (base or "olmo3-sft").rstrip("/").split("/")[-1] or "olmo3-sft"
     ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-    return f"{HF_NAMESPACE}/{name}-{ts}"
+    return f"{HF_NAMESPACE}/{name}_{ts}"
 
 
 def upload_hf(repo_id: str, repo_type: str, source_dir: Path, path_in_repo: str, private: bool,
@@ -275,6 +299,9 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                         "<output>/model, and uploads that.")
     p.add_argument("--skip-convert", "--skip_convert", dest="skip_convert", action="store_true",
                    help="Skip conversion; upload an existing <output>/model as-is.")
+    p.add_argument("--final", action="store_true",
+                   help="Mark this as the FINAL upload: name the repo …_final_<ts> (not step<N>) and ship "
+                        "even if the latest checkpoint is already marked. Used by train.py at end of run.")
     p.add_argument("--seq-len", "--seq_len", dest="seq_len", type=int, default=65536,
                    help="max_position_embeddings written into the HF config.")
     p.add_argument("--shard-size", "--shard_size", dest="shard_size", default="5GB",
@@ -304,19 +331,23 @@ def main(argv: Optional[list[str]] = None) -> int:
     checkpoint: Optional[Path] = None
     if not args.skip_convert:
         try:
-            checkpoint = find_final_checkpoint(output)
+            # --final forces the ship (skip_uploaded=False) so the end-of-run model is ALWAYS uploaded,
+            # even if the watcher already shipped that exact step as a step<N> repo.
+            checkpoint = find_final_checkpoint(output, skip_uploaded=not args.final)
         except AlreadyUploaded as already:
             log.info("latest checkpoint step%s already uploaded (%s present) — nothing new to ship",
                      already, UPLOAD_MARKER)
             return 0
-        log.info("final checkpoint: %s", checkpoint)
+        log.info("%scheckpoint: %s", "final " if args.final else "", checkpoint)
         convert_checkpoint(checkpoint, hf_model, args.seq_len, parse_size(args.shard_size))
 
     if not hf_model.is_dir():
         raise FileNotFoundError(f"no HF model at {hf_model} — run without --skip-convert, or check --output")
 
-    # Target: our HuggingFace namespace, auto-named <HF_NAMESPACE>/<base>-<timestamp>.
-    repo = hf_repo_id(args.hf_dataset.strip() or default_base_name(output))
+    # Target: our HuggingFace namespace. Default name is per-checkpoint (olmo_<size>_<prec>[_<suffix>]
+    # _step<N>_<ts>); --hf_dataset overrides the base.
+    base = args.hf_dataset.strip() or checkpoint_repo_base(output, checkpoint, final=args.final)
+    repo = hf_repo_id(base)
     upload_hf(repo, args.hf_repo_type, hf_model, args.hf_path_in_repo, args.hf_private, retries=args.retries)
     destination = f"hf://{'datasets' if args.hf_repo_type == 'dataset' else 'models'}/{repo}"
 

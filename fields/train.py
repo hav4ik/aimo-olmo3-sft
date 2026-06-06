@@ -37,6 +37,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -331,17 +332,55 @@ def is_node_zero() -> bool:
     return os.environ.get("NODE_RANK", os.environ.get("GLOBAL_RANK", "0")) == "0"
 
 
-def run_upload(output: Path, seq_len: int) -> int:
-    """Convert + upload the final checkpoint by invoking the sibling upload.py (it finds the latest
-    complete distcp under --output, converts to HF safetensors, and ships it). Returns its exit code.
-    upload.py self-loads HF_TOKEN from the baked SECRETS.json, so the inherited env is enough."""
+def run_upload(output: Path, seq_len: int, cpu_only: bool = True, quiet: bool = False,
+               final: bool = False) -> int:
+    """Convert + upload the latest checkpoint by invoking the sibling upload.py (it finds the latest
+    complete distcp under --output, converts to a per-checkpoint HF repo, ships it, and marks it). Returns
+    its exit code. cpu_only forces the conversion onto CPU (CUDA_VISIBLE_DEVICES='') so it never contends
+    with the training GPUs — the converter already defaults to --device cpu. final=True names the repo
+    ``…_final_<ts>``, ships even if that step is already marked, and uses extra retries (it's the
+    deliverable). upload.py self-loads HF_TOKEN from the baked SECRETS.json, so the inherited env is enough."""
     upload_py = Path(__file__).resolve().parent / "upload.py"
     if not upload_py.is_file():
         log.error("upload.py not found at %s — skipping auto-upload", upload_py)
         return 1
     cmd = [sys.executable, str(upload_py), "--output", str(output), "--seq-len", str(seq_len)]
-    log.info("auto-upload: %s", " ".join(cmd))
-    return subprocess.run(cmd, env=os.environ.copy()).returncode
+    if final:
+        cmd += ["--final", "--retries", os.environ.get("FIELDS_FINAL_UPLOAD_RETRIES", "10")]
+    env = os.environ.copy()
+    if cpu_only:
+        env["CUDA_VISIBLE_DEVICES"] = ""   # convert on CPU; never touch the training GPUs
+    if not quiet:
+        log.info("auto-upload%s: %s%s", " (final)" if final else "", " ".join(cmd),
+                 " (CPU-only)" if cpu_only else "")
+    return subprocess.run(cmd, env=env).returncode
+
+
+def upload_watcher(output: Path, seq_len: int, interval: float, stop: threading.Event) -> None:
+    """Background loop (node 0): every `interval`s, convert+upload the latest unmarked checkpoint WHILE
+    training runs — so each new checkpoint ships in parallel without blocking the GPUs. Conversion is
+    CPU-only; upload.py skips checkpoints already marked, so this no-ops between checkpoints. Best-effort:
+    each iteration's errors are logged, never raised (a failed ship must not disturb training)."""
+    log.info("upload watcher started (poll every %ds, CPU-only convert, ships each new checkpoint)", int(interval))
+    while not stop.wait(interval):  # sleep first (no checkpoint exists at step 0), wake early on stop
+        try:
+            run_upload(output, seq_len, cpu_only=True, quiet=True)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("upload watcher iteration failed (%s); retrying next interval", exc)
+    log.info("upload watcher stopped")
+
+
+def write_manifest(output: Path, args: argparse.Namespace, recipe: "Recipe", seq_len: int,
+                   save_root: Path, elapsed_min: Optional[float] = None) -> None:
+    """Self-describing manifest. Written BEFORE training so the upload watcher can read model_size /
+    precision / run_suffix for the per-checkpoint repo name; rewritten with elapsed_min at the end."""
+    lines = [f"experiment={args.experiment}", f"model_size={recipe.model_size}",
+             f"precision={recipe.precision}", f"run_suffix={args.run_suffix or ''}",
+             f"seq_len={seq_len}", f"checkpoints={save_root}",
+             f"next=python /app/upload.py --output {output}"]
+    if elapsed_min is not None:
+        lines.append(f"elapsed_min={elapsed_min:.1f}")
+    (output / "MANIFEST.txt").write_text("\n".join(lines) + "\n")
 
 
 def wandb_run_id(name: str) -> str:
@@ -540,36 +579,50 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     env = build_env(args, recipe, workdir, output, logdir, seq_len, ckpt_base, save_root)
 
+    # Manifest BEFORE training so the upload watcher can read model_size/precision/run_suffix for the
+    # per-checkpoint repo name. Rewritten with elapsed_min at the end.
+    write_manifest(output, args, recipe, seq_len, save_root)
+
+    # Background upload watcher (node 0): ships each new checkpoint to its own per-checkpoint HF repo in
+    # PARALLEL with training — CPU-only convert, best-effort, never blocks the GPUs. Disable via --no-upload.
+    stop_watcher = threading.Event()
+    watcher: Optional[threading.Thread] = None
+    if args.upload and is_node_zero():
+        interval = float(os.environ.get("FIELDS_UPLOAD_WATCH_INTERVAL", "300"))
+        watcher = threading.Thread(target=upload_watcher, args=(output, seq_len, interval, stop_watcher),
+                                   name="upload-watcher", daemon=True)
+        watcher.start()
+
     # run.sh does: HF base -> distcp convert (cached) + dataset download + torchrun training. Streamed so
     # we can update the W&B setup phases from run.sh's markers and hand the run off at training launch.
-    rc = stream_run_sh(["bash", str(run_sh)], env, code_root, logdir / "run.log", wb)
+    try:
+        rc = stream_run_sh(["bash", str(run_sh)], env, code_root, logdir / "run.log", wb)
+    finally:
+        if watcher is not None:                 # stop the watcher and let any in-flight upload finish
+            stop_watcher.set()
+            watcher.join()
     if rc != 0:
         raise RuntimeError(f"run.sh failed (exit {rc}) — see {logdir / 'run.log'}")
-    log.info("training finished in %.1f min", (time.monotonic() - t0) / 60.0)
+    elapsed_min = (time.monotonic() - t0) / 60.0
+    log.info("training finished in %.1f min", elapsed_min)
+    write_manifest(output, args, recipe, seq_len, save_root, elapsed_min)
 
-    # Manifest so the result is self-describing — and upload.py reads experiment= from it for the repo name.
-    (output / "MANIFEST.txt").write_text(
-        f"experiment={args.experiment}\nmodel_size={recipe.model_size}\nprecision={recipe.precision}\n"
-        f"seq_len={seq_len}\ncheckpoints={save_root}\n"
-        f"next=python /app/upload.py --output {output}\n"
-        f"elapsed_min={(time.monotonic() - t0) / 60.0:.1f}\n")
-
-    # Auto convert + upload the final checkpoint. Node 0 only (so multi-node runs don't race the same
-    # upload); other nodes stop here. An upload failure is surfaced as the exit code, but the distcp is
-    # intact on disk and the manifest's `next=` line lets you re-run upload.py by hand.
+    # Final convert + upload of the deliverable — names it `…_final_<ts>` and ships even if the watcher
+    # already shipped that step. Node 0 only. A failure is surfaced as the exit code, but the distcp is
+    # intact and the manifest's `next=` line lets you re-run `python /app/upload.py --final` by hand.
     if args.upload and is_node_zero():
-        up_rc = run_upload(output, seq_len)
+        up_rc = run_upload(output, seq_len, final=True)
         if up_rc != 0:
-            log.error("auto-upload FAILED (exit %d) — checkpoints intact; re-run by hand: "
-                      "python /app/upload.py --output %s", up_rc, output)
+            log.error("final auto-upload FAILED (exit %d) — checkpoints intact; re-run by hand: "
+                      "python /app/upload.py --final --output %s", up_rc, output)
             return up_rc
-        log.info("DONE in %.1f min | uploaded | distcp under %s", (time.monotonic() - t0) / 60.0, save_root)
+        log.info("DONE in %.1f min | uploaded | distcp under %s", elapsed_min, save_root)
         return 0
     if args.upload:
         log.info("node %s: skipping upload (node 0 ships the model)",
                  os.environ.get("NODE_RANK", os.environ.get("GLOBAL_RANK", "0")))
     log.info("DONE in %.1f min | distcp under %s | upload: python /app/upload.py --output %s",
-             (time.monotonic() - t0) / 60.0, save_root, output)
+             elapsed_min, save_root, output)
     return 0
 
 
