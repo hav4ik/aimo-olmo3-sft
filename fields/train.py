@@ -198,6 +198,13 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--no-upload", dest="upload", action="store_false",
                    help="Do not auto-upload; leave the distcp for a manual python /app/upload.py.")
 
+    # Preflight gate: run smoke_test.py before training and abort if a CRITICAL check fails.
+    p.add_argument("--smoke-test", dest="smoke_test", action="store_true",
+                   default=os.environ.get("FIELDS_SMOKE_TEST", "1").lower() not in ("0", "false", "no", ""),
+                   help="Run smoke_test.py preflight before training; abort if a CRITICAL check fails. Default on.")
+    p.add_argument("--no-smoke-test", dest="smoke_test", action="store_false",
+                   help="Skip the preflight smoke test (not recommended for real runs).")
+
     # Sources (override the defaults if you host the artifacts elsewhere).
     p.add_argument("--dataset_repo", default=DEFAULT_DATASET_REPO, help="HF dataset repo to download when --dataset_path is unset.")
     p.add_argument("--dataset_subdir", default=DEFAULT_DATASET_SUBDIR, help="Subdir in the dataset repo holding the .npy.")
@@ -332,14 +339,31 @@ def is_node_zero() -> bool:
     return os.environ.get("NODE_RANK", os.environ.get("GLOBAL_RANK", "0")) == "0"
 
 
+def run_smoke_test(workdir: Path, output: Path, require_hf: bool) -> int:
+    """Preflight: run the sibling smoke_test.py (GPUs, torch/CUDA, olmo_core/flash-attn/TE imports, the HF
+    converter, writable workdir/output, free disk, and — when require_hf — HF token + hub reachability as
+    CRITICAL). Returns its exit code; non-zero == a CRITICAL check failed, so we must NOT start a multi-day
+    run that can't finish or ship its result."""
+    smoke = Path(__file__).resolve().parent / "smoke_test.py"
+    if not smoke.is_file():
+        log.error("smoke_test.py not found at %s — cannot preflight", smoke)
+        return 1
+    cmd = [sys.executable, str(smoke), "--workdir", str(workdir), "--output", str(output)]
+    if require_hf:
+        cmd.append("--require-hf")
+    log.info("preflight: %s", " ".join(cmd))
+    return subprocess.run(cmd, env=os.environ.copy()).returncode
+
+
 def run_upload(output: Path, seq_len: int, cpu_only: bool = True, quiet: bool = False,
-               final: bool = False) -> int:
+               final: bool = False, timeout: Optional[float] = None) -> int:
     """Convert + upload the latest checkpoint by invoking the sibling upload.py (it finds the latest
     complete distcp under --output, converts to a per-checkpoint HF repo, ships it, and marks it). Returns
     its exit code. cpu_only forces the conversion onto CPU (CUDA_VISIBLE_DEVICES='') so it never contends
     with the training GPUs — the converter already defaults to --device cpu. final=True names the repo
     ``…_final_<ts>``, ships even if that step is already marked, and uses extra retries (it's the
-    deliverable). upload.py self-loads HF_TOKEN from the baked SECRETS.json, so the inherited env is enough."""
+    deliverable). timeout bounds the subprocess (the watcher passes one so a wedged ship can't stall the
+    loop; the FINAL passes None — it must keep trying). upload.py self-loads HF_TOKEN from SECRETS.json."""
     upload_py = Path(__file__).resolve().parent / "upload.py"
     if not upload_py.is_file():
         log.error("upload.py not found at %s — skipping auto-upload", upload_py)
@@ -353,18 +377,25 @@ def run_upload(output: Path, seq_len: int, cpu_only: bool = True, quiet: bool = 
     if not quiet:
         log.info("auto-upload%s: %s%s", " (final)" if final else "", " ".join(cmd),
                  " (CPU-only)" if cpu_only else "")
-    return subprocess.run(cmd, env=env).returncode
+    try:
+        return subprocess.run(cmd, env=env, timeout=timeout).returncode
+    except subprocess.TimeoutExpired:
+        log.warning("upload subprocess exceeded %ss and was killed (will retry next poll)", timeout)
+        return 124
 
 
-def upload_watcher(output: Path, seq_len: int, interval: float, stop: threading.Event) -> None:
+def upload_watcher(output: Path, seq_len: int, interval: float, stop: threading.Event,
+                   timeout: float) -> None:
     """Background loop (node 0): every `interval`s, convert+upload the latest unmarked checkpoint WHILE
     training runs — so each new checkpoint ships in parallel without blocking the GPUs. Conversion is
-    CPU-only; upload.py skips checkpoints already marked, so this no-ops between checkpoints. Best-effort:
-    each iteration's errors are logged, never raised (a failed ship must not disturb training)."""
-    log.info("upload watcher started (poll every %ds, CPU-only convert, ships each new checkpoint)", int(interval))
+    CPU-only; upload.py skips checkpoints already marked, so this no-ops between checkpoints. Each upload is
+    bounded by `timeout` so a wedged ship can't stall the loop (or the shutdown join). Best-effort: every
+    iteration's errors are logged, never raised (a failed ship must not disturb training)."""
+    log.info("upload watcher started (poll every %ds, %.0fmin/upload cap, CPU-only, ships each new checkpoint)",
+             int(interval), timeout / 60.0)
     while not stop.wait(interval):  # sleep first (no checkpoint exists at step 0), wake early on stop
         try:
-            run_upload(output, seq_len, cpu_only=True, quiet=True)
+            run_upload(output, seq_len, cpu_only=True, quiet=True, timeout=timeout)
         except Exception as exc:  # noqa: BLE001
             log.warning("upload watcher iteration failed (%s); retrying next interval", exc)
     log.info("upload watcher stopped")
@@ -512,6 +543,11 @@ def launch_remote_shell(workdir: Path, relay_space: str, logdir: Path) -> None:
 # --------------------------------------------------------------------------------------------------
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
+    # --run-suffix becomes part of the HF repo name + the W&B run name, so it must be a safe token. Fail
+    # fast (before a multi-day run) on anything but ASCII alphanumeric/hyphen. Default is empty (no suffix).
+    if args.run_suffix and not re.fullmatch(r"[A-Za-z0-9-]+", args.run_suffix):
+        raise SystemExit(f"--run-suffix must be ASCII alphanumeric/hyphen ([A-Za-z0-9-]); got "
+                         f"{args.run_suffix!r}. It becomes part of the HuggingFace repo name.")
     load_secrets()  # HF_TOKEN / WANDB_API_KEY from baked SECRETS.json, else env
     recipe = RECIPES[args.experiment]
     seq_len = args.seq_len or recipe.seq_len
@@ -537,6 +573,19 @@ def main(argv: Optional[list[str]] = None) -> int:
     if os.environ.get("HF_HOME", BAKED_HF_HOME) in (BAKED_HF_HOME, ""):
         os.environ["HF_HOME"] = str(workdir / "hf_cache")
         log.info("HF_HOME -> %s (under workdir)", os.environ["HF_HOME"])
+
+    # Preflight gate: only start the (multi-day) run if the environment is sound. HF credentials are
+    # ALWAYS required — the base model + dataset are downloaded from HF and the result is uploaded there —
+    # so a missing/invalid HF token is a hard FAIL. Bypass the whole gate with --no-smoke-test.
+    if args.smoke_test:
+        rc_smoke = run_smoke_test(workdir, output, require_hf=True)
+        if rc_smoke != 0:
+            log.error("PREFLIGHT FAILED (smoke_test exit %d) — aborting before training. Fix the CRITICAL "
+                      "checks above (e.g. a missing/expired HF token in SECRETS.json or the env), then retry. "
+                      "Re-run the checks with: python /app/smoke_test.py --require-hf --workdir %s --output %s "
+                      "(or pass --no-smoke-test to bypass — NOT recommended for a real run).",
+                      rc_smoke, workdir, output)
+            return rc_smoke
 
     # Bring up the debug shell ASAP (every node) so you can attach even during download/convert.
     if args.remote_shell:
@@ -584,12 +633,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     write_manifest(output, args, recipe, seq_len, save_root)
 
     # Background upload watcher (node 0): ships each new checkpoint to its own per-checkpoint HF repo in
-    # PARALLEL with training — CPU-only convert, best-effort, never blocks the GPUs. Disable via --no-upload.
+    # PARALLEL with training — CPU-only convert, best-effort, never blocks the GPUs. Each upload is bounded
+    # by FIELDS_UPLOAD_TIMEOUT (default 90min) so a wedged ship can't stall the loop OR the shutdown join.
+    # Disable via --no-upload.
+    upload_timeout = float(os.environ.get("FIELDS_UPLOAD_TIMEOUT", "5400"))
     stop_watcher = threading.Event()
     watcher: Optional[threading.Thread] = None
     if args.upload and is_node_zero():
         interval = float(os.environ.get("FIELDS_UPLOAD_WATCH_INTERVAL", "300"))
-        watcher = threading.Thread(target=upload_watcher, args=(output, seq_len, interval, stop_watcher),
+        watcher = threading.Thread(target=upload_watcher,
+                                   args=(output, seq_len, interval, stop_watcher, upload_timeout),
                                    name="upload-watcher", daemon=True)
         watcher.start()
 
@@ -598,31 +651,37 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         rc = stream_run_sh(["bash", str(run_sh)], env, code_root, logdir / "run.log", wb)
     finally:
-        if watcher is not None:                 # stop the watcher and let any in-flight upload finish
+        if watcher is not None:
+            # Stop the watcher. Its uploads self-terminate within upload_timeout, so this join is BOUNDED
+            # (can't hang) and guarantees no watcher convert is still running when the final convert starts.
             stop_watcher.set()
-            watcher.join()
-    if rc != 0:
-        raise RuntimeError(f"run.sh failed (exit {rc}) — see {logdir / 'run.log'}")
-    elapsed_min = (time.monotonic() - t0) / 60.0
-    log.info("training finished in %.1f min", elapsed_min)
-    write_manifest(output, args, recipe, seq_len, save_root, elapsed_min)
+            watcher.join(timeout=upload_timeout + 300)
 
-    # Final convert + upload of the deliverable — names it `…_final_<ts>` and ships even if the watcher
-    # already shipped that step. Node 0 only. A failure is surfaced as the exit code, but the distcp is
-    # intact and the manifest's `next=` line lets you re-run `python /app/upload.py --final` by hand.
+    elapsed_min = (time.monotonic() - t0) / 60.0
+    if rc == 0:
+        log.info("training finished in %.1f min", elapsed_min)
+        write_manifest(output, args, recipe, seq_len, save_root, elapsed_min)
+
+    # Final convert + upload of the deliverable — ALWAYS attempted (training success OR crash), node 0 only,
+    # with NO timeout (it must keep trying — it's the deliverable). Names it `…_final_<ts>` and ships even if
+    # the watcher already shipped that step; on a crash it ships the latest survivable checkpoint. The
+    # training failure (if any) is surfaced AFTER we've tried to ship; the manifest `next=` line documents
+    # the manual re-run.
+    final_rc = 0
     if args.upload and is_node_zero():
-        up_rc = run_upload(output, seq_len, final=True)
-        if up_rc != 0:
-            log.error("final auto-upload FAILED (exit %d) — checkpoints intact; re-run by hand: "
-                      "python /app/upload.py --final --output %s", up_rc, output)
-            return up_rc
-        log.info("DONE in %.1f min | uploaded | distcp under %s", elapsed_min, save_root)
-        return 0
-    if args.upload:
+        final_rc = run_upload(output, seq_len, final=True, timeout=None)
+    elif args.upload:
         log.info("node %s: skipping upload (node 0 ships the model)",
                  os.environ.get("NODE_RANK", os.environ.get("GLOBAL_RANK", "0")))
-    log.info("DONE in %.1f min | distcp under %s | upload: python /app/upload.py --output %s",
-             elapsed_min, save_root, output)
+
+    if rc != 0:  # surface the training failure (we already best-effort shipped the survivor above)
+        raise RuntimeError(f"run.sh failed (exit {rc}) — see {logdir / 'run.log'}")
+    if final_rc != 0:
+        log.error("final auto-upload FAILED (exit %d) — checkpoints intact; re-run by hand: "
+                  "python /app/upload.py --final --output %s", final_rc, output)
+        return final_rc
+    log.info("DONE in %.1f min | %s | distcp under %s", elapsed_min,
+             "uploaded" if (args.upload and is_node_zero()) else "no upload (node!=0 or --no-upload)", save_root)
     return 0
 
 

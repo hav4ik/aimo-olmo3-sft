@@ -6,17 +6,18 @@ You pass ONLY the train.py output dir (``--output``); this script does the rest:
   2. converts it to a HuggingFace safetensors model at ``<output>/model`` — with the legacy
      ``rope_scaling`` + ``rope_theta`` config (transformers 4.x / vLLM / sglang compatible) and
      HF-convention sharding (model-0000i-of-0000N + index for >5 GB), and
-  3. uploads ``<output>/model`` to our HuggingFace namespace, auto-named
-     ``chankhavu/<base>-<YYYYMMDDHHMMSS>`` — the base comes from the run's experiment; ``--hf_dataset``
-     only overrides the base name, and any namespace in it is ignored (so it can't be pushed to the
-     wrong place or collide).
+  3. uploads ``<output>/model`` to our HuggingFace namespace under a FULLY-ENFORCED name —
+     ``chankhavu/olmo_<size>_<precision>[_<run-suffix>]_<step<N>|final>_<YYYYMMDDHHMMSS>``. The repo name is
+     not caller-overridable; the only user-chosen part is ``run_suffix`` (set once via ``train.py
+     --run-suffix``, validated, and recorded in the run's MANIFEST.txt).
 
 ``--skip-convert`` uploads an existing ``<output>/model`` as-is (e.g. to re-ship without reconverting).
+``--final`` names the repo ``…_final_<ts>`` and ships even if the checkpoint is already marked.
 
 Examples::
 
-    HF_TOKEN=hf_xxx python /app/upload.py --output /results              # -> chankhavu/<experiment>-<ts>
-    HF_TOKEN=hf_xxx python /app/upload.py --output /results --hf_dataset olmo3-7b   # chankhavu/olmo3-7b-<ts>
+    HF_TOKEN=hf_xxx python /app/upload.py --output /results            # -> chankhavu/olmo_7b_fp8_..._step<N>_<ts>
+    HF_TOKEN=hf_xxx python /app/upload.py --output /results --final    # -> chankhavu/olmo_7b_fp8_..._final_<ts>
 """
 from __future__ import annotations
 
@@ -228,11 +229,15 @@ def checkpoint_repo_base(output: Path, checkpoint: Optional[Path], final: bool =
 
 
 def hf_repo_id(base: str) -> str:
-    """Force the repo to <HF_NAMESPACE>/<base>_<YYYYMMDDHHMMSS>. Any namespace the caller put in `base`
-    is stripped (we keep only the last path segment), so the upload always lands in OUR namespace with a
-    unique, non-colliding name."""
-    name = (base or "olmo3-sft").rstrip("/").split("/")[-1] or "olmo3-sft"
+    """Force the repo to <HF_NAMESPACE>/<base>_<YYYYMMDDHHMMSS>. Any namespace the caller put in `base` is
+    stripped (we keep only the last path segment), so the upload always lands in OUR namespace. Defensively
+    sanitized to a valid HF repo id (HF allows only [A-Za-z0-9._-], max 96 chars) — train.py already
+    validates --run-suffix (the only user input), this is just the safety net."""
+    name = (base or "olmo3-sft").rstrip("/").split("/")[-1]
+    name = re.sub(r"[^A-Za-z0-9._-]", "-", name)
+    name = re.sub(r"-{2,}", "-", name).strip("-._")
     ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    name = name[:95 - len(ts)].strip("-._") or "olmo3-sft"   # keep <name>_<ts> within HF's 96-char limit
     return f"{HF_NAMESPACE}/{name}_{ts}"
 
 
@@ -284,7 +289,8 @@ def write_success_marker(checkpoint: Path, destination: str) -> None:
         marker.write_text(f"uploaded {ts}\ndestination: {destination}\n")
         log.info("wrote upload marker -> %s", marker)
     except Exception as exc:  # noqa: BLE001 — marker must not fail an otherwise-successful upload
-        log.warning("could not write upload marker (%s)", exc)
+        log.error("could not write upload marker %s (%s) — this checkpoint may be re-uploaded next poll",
+                  marker, exc)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -306,10 +312,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                    help="max_position_embeddings written into the HF config.")
     p.add_argument("--shard-size", "--shard_size", dest="shard_size", default="5GB",
                    help="Shard the exported safetensors at this size (e.g. 5GB, 4GiB). '0'/'none' = single file.")
-    # HF target
-    p.add_argument("--hf_dataset", default=os.environ.get("FIELDS_HF_DATASET", ""),
-                   help=f"Base NAME for the HF upload — namespace is ignored and forced to "
-                        f"{HF_NAMESPACE}/<name>-<YYYYMMDDHHMMSS>. Empty => name from the run's experiment.")
+    # HF target — the repo NAME is enforced (olmo_<size>_<prec>[_<suffix>]_<step|final>_<ts>); not overridable.
     p.add_argument("--hf_repo_type", default="model", choices=["model", "dataset"], help="HF repo type.")
     p.add_argument("--hf_path_in_repo", default="", help="Subpath inside the HF repo (default: root).")
     p.add_argument("--hf_private", action="store_true", default=False, help="Create the HF repo private.")
@@ -344,10 +347,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not hf_model.is_dir():
         raise FileNotFoundError(f"no HF model at {hf_model} — run without --skip-convert, or check --output")
 
-    # Target: our HuggingFace namespace. Default name is per-checkpoint (olmo_<size>_<prec>[_<suffix>]
-    # _step<N>_<ts>); --hf_dataset overrides the base.
-    base = args.hf_dataset.strip() or checkpoint_repo_base(output, checkpoint, final=args.final)
-    repo = hf_repo_id(base)
+    # Target: our HuggingFace namespace, ENFORCED per-checkpoint name (olmo_<size>_<prec>[_<suffix>]_
+    # <step<N>|final>_<ts>) — not caller-overridable; the only user input is run_suffix (from the manifest).
+    repo = hf_repo_id(checkpoint_repo_base(output, checkpoint, final=args.final))
     upload_hf(repo, args.hf_repo_type, hf_model, args.hf_path_in_repo, args.hf_private, retries=args.retries)
     destination = f"hf://{'datasets' if args.hf_repo_type == 'dataset' else 'models'}/{repo}"
 

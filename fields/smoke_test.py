@@ -43,6 +43,7 @@ MIN_FREE_GB = float(os.environ.get("FIELDS_MIN_FREE_GB", "150"))  # 7B: base dis
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
 _results: list[tuple[str, str, str]] = []
+REQUIRE_HF = False  # set from --require-hf: when True, a missing/invalid HF token is CRITICAL, not a WARN
 
 
 def record(name: str, status: str, msg: str = "") -> None:
@@ -98,11 +99,12 @@ def c_fp8() -> tuple[str, str]:
 
 
 def c_hf_whoami() -> tuple[str, str]:
+    bad = FAIL if REQUIRE_HF else WARN  # with --require-hf a bad token blocks the run (uploads would fail)
     if not os.environ.get("HF_TOKEN"):
-        return WARN, "HF_TOKEN not set (no SECRETS.json / env) — downloads of private repos will fail"
+        return bad, "HF_TOKEN not set (no SECRETS.json / env) — uploads + private downloads will fail"
     rc, out = sh(["hf", "auth", "whoami"])
     if rc != 0:
-        return WARN, f"hf auth whoami failed: {out[:160]}"
+        return bad, f"hf auth whoami failed (token invalid/expired?): {out[:160]}"
     return PASS, f"hf user: {out.splitlines()[0][:80]}"
 
 
@@ -198,16 +200,21 @@ def c_torchrun() -> tuple[str, str]:
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Fields container smoke test")
-    p.add_argument("--workdir", default=os.environ.get("FIELDS_WORKDIR", "/tmp/fields-olmo-sft"))
-    p.add_argument("--output", default=os.environ.get("FIELDS_OUTPUT", "./output"))
+    p.add_argument("--workdir", default=os.environ.get("FIELDS_WORKDIR", "/tmp/olmo-sft/work"))
+    p.add_argument("--output", default=os.environ.get("FIELDS_OUTPUT", "/tmp/olmo-sft/output"))
     p.add_argument("--skip_network", action="store_true", help="Skip the HuggingFace hub reachability check.")
+    p.add_argument("--require-hf", "--require_hf", dest="require_hf", action="store_true",
+                   help="Treat the HF token (whoami) + hub reachability as CRITICAL — fail if the token is "
+                        "missing/invalid. train.py passes this when auto-upload is on (a bad token = lost deliverable).")
     # parse_known_args so the function is reusable from inside checks without arg conflicts
     return p.parse_known_args(argv)[0]
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    global REQUIRE_HF
     load_secrets()
     args = parse_args(argv)
+    REQUIRE_HF = args.require_hf
     print("=" * 78)
     print("Fields container smoke test")
     print(f"  workdir={args.workdir}  output={args.output}  OLMo-core={OLMO_CORE_ROOT}")
@@ -219,7 +226,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         ("nvidia-smi (GPUs visible)", c_nvidia_smi, True),
         ("torch CUDA", c_torch_cuda, True),
         ("FP8 (_scaled_mm)", c_fp8, False),
-        ("hf auth whoami", c_hf_whoami, False),
+        ("hf auth whoami", c_hf_whoami, args.require_hf),
         ("wandb login --verify", c_wandb, False),
         ("core files exist", c_core_files, True),
         ("workdir/output writable", c_writable, True),
@@ -233,7 +240,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         ("torchrun present", c_torchrun, True),
     ]
     if not args.skip_network:
-        checks.append(("HF hub reachable", c_hf_connectivity, False))
+        checks.append(("HF hub reachable", c_hf_connectivity, args.require_hf))
 
     print("\nChecks:")
     for name, fn, critical in checks:
