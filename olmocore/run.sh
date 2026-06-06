@@ -34,11 +34,20 @@ NPROC="${NPROC_PER_NODE:-$(nvidia-smi -L | wc -l)}"
 MODEL_SIZE="${MODEL_SIZE:-7b}"
 # DEF_KEEP = default cap on persistent checkpoints kept on disk (distcp ~100 GB/7B, ~450 GB/32B vs
 # the ~1 TB budget): 7B keep 3 (~300 GB), 32B keep 2 (~900 GB). Override with OLMO_KEEP_LAST_CKPTS (0=all).
+# DEF_SFT = the size-specific SFT script basename under sft_scripts/ (resolved to a path further down).
+# The 7B/32B share the olmo3 long-context script; 1b is a separate LOCAL TEST path on the real published
+# allenai/OLMo-2-0425-1B-Instruct (Olmo-2 1B; --model-arch olmo2_1b_v2, native 4096 ctx — see the script's
+# header). 1b is for exercising the full pipeline (convert->train->convert->upload) on one small GPU, NOT a
+# real recipe: small lr / batch / keep, and a short single-GPU smoke (e.g. SEQ_LEN=4096 GLOBAL_BATCH_SIZE
+# small MAX_STEPS=10).
 case "$MODEL_SIZE" in
-    7b)  HF_MODEL="${HF_MODEL:-allenai/Olmo-3-7B-Think}";    MODEL_ARCH="${MODEL_ARCH:-olmo3_7b}";  DEF_LR=5e-5; DEF_GBS=1048576; DEF_KEEP=3 ;;
-    32b) HF_MODEL="${HF_MODEL:-allenai/Olmo-3.1-32B-Think}"; MODEL_ARCH="${MODEL_ARCH:-olmo3_32b}"; DEF_LR=1e-4; DEF_GBS=4194304; DEF_KEEP=2 ;;
-    *)   echo "ERROR: MODEL_SIZE='$MODEL_SIZE' (want 7b|32b)"; exit 2 ;;
+    1b)  HF_MODEL="${HF_MODEL:-allenai/OLMo-2-0425-1B-Instruct}"; MODEL_ARCH="${MODEL_ARCH:-olmo2_1b_v2}"; DEF_LR=5e-5; DEF_GBS=4096;    DEF_KEEP=1; DEF_SFT=Olmo-2-1B-SFT-local.py;  DEF_SEQ_LEN=4096 ;;
+    7b)  HF_MODEL="${HF_MODEL:-allenai/Olmo-3-7B-Think}";    MODEL_ARCH="${MODEL_ARCH:-olmo3_7b}";  DEF_LR=5e-5; DEF_GBS=1048576; DEF_KEEP=3; DEF_SFT=Olmo-3-7B-SFT-local.py;  DEF_SEQ_LEN=65536 ;;
+    32b) HF_MODEL="${HF_MODEL:-allenai/Olmo-3.1-32B-Think}"; MODEL_ARCH="${MODEL_ARCH:-olmo3_32b}"; DEF_LR=1e-4; DEF_GBS=4194304; DEF_KEEP=2; DEF_SFT=Olmo-3-32B-SFT-local.py; DEF_SEQ_LEN=65536 ;;
+    *)   echo "ERROR: MODEL_SIZE='$MODEL_SIZE' (want 1b|7b|32b)"; exit 2 ;;
 esac
+SFT_SCRIPT_NAME="${SFT_SCRIPT_NAME:-$DEF_SFT}"   # per-size SFT script basename; explicit env wins
+SEQ_LEN="${SEQ_LEN:-$DEF_SEQ_LEN}"   # per-size default (1b=4096 native, 7b/32b=65536); explicit env wins
 export OLMO_KEEP_LAST_CKPTS="${OLMO_KEEP_LAST_CKPTS:-$DEF_KEEP}"
 CKPT="${CKPT:-$DATA/checkpoints/olmocore-olmo3-${MODEL_SIZE}-think/model_and_optim}"
 CKPT_DIR="$(dirname "$CKPT")"
@@ -129,6 +138,14 @@ case "$CC" in 9.*) DEFATTN=flash_3 ;; *) DEFATTN=flash_2 ;; esac
 # moot once CP is required). FA3 stays the default only for short-context (no-CP) runs, e.g. smokes.
 if [ "${SEQ_LEN:-65536}" -gt "${OLMO_MAX_TOKENS_PER_RANK:-16384}" ] && [ "${OLMO_CP_STYLE:-ring}" = "ring" ]; then
     DEFATTN=flash_2   # CP engages (seq_len exceeds the per-rank cap) with ring -> FA2. At cp=1 (cap>=seq_len) FA3 stays.
+fi
+# 1b LOCAL TEST ONLY (does NOT affect 7b/32b): default to the SDPA/torch attention backend — it needs no
+# special kernel, so it runs on ANY GPU incl. Ampere sm_86 (RTX 3090) where our FA2 build has no kernel.
+# SDPA can't do intra-document masking, so also default OLMO_DOC_MASKING=0 (cross-doc attention — fine for
+# a pipeline / write-correctness test). Override either env to force flash + doc-masking on a capable GPU.
+if [ "$MODEL_SIZE" = "1b" ]; then
+    DEFATTN=torch
+    export OLMO_DOC_MASKING="${OLMO_DOC_MASKING:-0}"
 fi
 export OLMO_ATTN_BACKEND="${OLMO_ATTN_BACKEND:-$DEFATTN}"
 export OLMO_SFT_SAVE_ROOT="${OLMO_SFT_SAVE_ROOT:-$DATA/checkpoints}"   # overridable: Fields train.py -> --output (OLMO_FP8 set arch-aware above; all-attn stays BF16)
@@ -229,8 +246,10 @@ fi
 unset RANK WORLD_SIZE GLOBAL_RANK LOCAL_RANK 2>/dev/null || true
 
 echo "[olmocore] $PRECISION | ${NNODES}x${NPROC} GPU cc=$CC | attn=$OLMO_ATTN_BACKEND | cp=${OLMO_CP_STYLE:-ring} | ac=${OLMO_AC_BUDGET:-selected_ffn} | fp8=${OLMO_FP8:-off}${OLMO_FP8_FSDP_ALLGATHER:+/ag} | optim=$OLMO_OPTIM | ckpt=${OLMO_SAVE_INTERVAL:-1000}/${OLMO_EPHEMERAL_INTERVAL:-500}/keep${OLMO_KEEP_LAST_CKPTS} | node ${NODE_RANK}/${NNODES} | $DUR_VAL $DUR_UNIT"
-# Size-specific SFT script (local copy of AI2's, beaker-stubbed): Olmo-3-7B/32B-SFT-local.py.
-SFT_SCRIPT="$HERE/sft_scripts/Olmo-3-${MODEL_SIZE^^}-SFT-local.py"
+# Size-specific SFT script (local copy of AI2's, beaker-stubbed). Resolved per MODEL_SIZE via the table
+# above (DEF_SFT): 7b/32b -> Olmo-3-{7B,32B}-SFT-local.py (olmo3 long-context); 1b -> Olmo-2-1B-SFT-local.py
+# (Olmo-2 1B local test path). Each size's MODEL_ARCH/HF_MODEL is set in the same table, so they stay in sync.
+SFT_SCRIPT="$HERE/sft_scripts/$SFT_SCRIPT_NAME"
 [ -f "$SFT_SCRIPT" ] || { echo "ERROR: no SFT script for MODEL_SIZE=$MODEL_SIZE at $SFT_SCRIPT"; exit 2; }
 exec torchrun "${RDZV[@]}" --nproc_per_node="$NPROC" \
     "$SFT_SCRIPT" \

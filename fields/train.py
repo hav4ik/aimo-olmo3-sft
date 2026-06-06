@@ -69,17 +69,23 @@ DEFAULT_CODE_REF = os.environ.get("FIELDS_CODE_REF", "olmo-sft-32b")
 class Recipe:
     """A named (size, precision) recipe and the AI2 defaults that reproduce it."""
 
-    model_size: str          # "7b" | "32b"
+    model_size: str          # "1b" | "7b" | "32b"
     precision: str           # "bf16" | "fp8"
     model_repo: str          # default HF base model (overridable by --model_path)
     default_lr: float        # AI2 SFT learning rate for this size
     default_epochs: float = 1.0   # AI2 ships 2; we default 1 (override with --num-train-epochs 2)
     seq_len: int = 65536
+    default_global_batch: int = 0  # 0 => the CLI default (1,048,576 / AI2 7B). Small models set a smaller one.
 
 
 RECIPES: dict[str, Recipe] = {
     "olmo_7b_bf16": Recipe("7b", "bf16", "allenai/Olmo-3-7B-Think", 5e-5),
     "olmo_7b_fp8": Recipe("7b", "fp8", "allenai/Olmo-3-7B-Think", 5e-5),
+    # LOCAL TEST: the real published Olmo-2 1B (Olmo-2 arch, native 4096 ctx). For exercising the full
+    # pipeline (convert->train->convert->upload) on one small GPU — NOT a real recipe. run.sh maps size
+    # "1b" to Olmo-2-1B-SFT-local.py + --model-arch olmo2_1b_v2. Small seq_len + global batch so it fits.
+    "olmo_1b_bf16": Recipe("1b", "bf16", "allenai/OLMo-2-0425-1B-Instruct", 5e-5,
+                           seq_len=4096, default_global_batch=4096),
     # 32B recipes are added once the 7B submission passes (lr 1e-4, GBS 4,194,304).
 }
 
@@ -144,9 +150,9 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 
     # Batching — the clean inputs olmo-core derives cp_degree / rank-microbatch / grad-accum FROM.
     p.add_argument("--global-batch-tokens", "--global_batch_tokens", dest="global_batch_tokens",
-                   type=int, default=1_048_576,
+                   type=int, default=0,
                    help="Global batch in TOKENS. olmo-core derives cp_degree/rank-microbatch/grad-accum from "
-                        "this + seq_len + world_size. Default 1,048,576 (AI2 7B recipe).")
+                        "this + seq_len + world_size. 0 => the recipe default (1,048,576 / AI2 7B; small for 1b).")
     p.add_argument("--seq-len", "--seq_len", dest="seq_len", type=int, default=0,
                    help="Max sequence length (0 => recipe default = 65536).")
     p.add_argument("--rank-microbatch-tokens", "--rank_microbatch_tokens", dest="rank_microbatch_tokens",
@@ -565,6 +571,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     load_secrets()  # HF_TOKEN / WANDB_API_KEY from baked SECRETS.json, else env
     recipe = RECIPES[args.experiment]
     seq_len = args.seq_len or recipe.seq_len
+    # Global batch: explicit CLI wins; else the recipe's small default (1b); else the AI2 7B default.
+    args.global_batch_tokens = args.global_batch_tokens or recipe.default_global_batch or 1_048_576
 
     output = Path(args.output_path or args.output).resolve()
     workdir = Path(args.workdir).resolve()
@@ -587,6 +595,24 @@ def main(argv: Optional[list[str]] = None) -> int:
     if os.environ.get("HF_HOME", BAKED_HF_HOME) in (BAKED_HF_HOME, ""):
         os.environ["HF_HOME"] = str(workdir / "hf_cache")
         log.info("HF_HOME -> %s (under workdir)", os.environ["HF_HOME"])
+
+    # Route ALL runtime writes onto the writable mount (--workdir, under /tmp): the image rootfs is
+    # read-only and we don't depend on an externally-bound $HOME. Per-node scratch (compile caches, $HOME,
+    # TMPDIR) lives under node/<hostname>/ — because --workdir is a SHARED filesystem in multi-node runs, and
+    # a shared Triton/inductor cache would make every node race the same files (their locking is unreliable
+    # on network FS). HF hub cache (workdir/hf_cache, set above) and W&B (workdir/wandb, node-0 single writer)
+    # stay SHARED. Set in os.environ so both this process and the training subprocess use them; the
+    # subprocess also runs with cwd=<workdir>.
+    nodedir = workdir / "node" / (os.uname().nodename or "node")
+    wandb_dir = workdir / "wandb"
+    for d in (nodedir / "home", nodedir / "tmp", nodedir / "triton", nodedir / "inductor", wandb_dir):
+        d.mkdir(parents=True, exist_ok=True)
+    os.environ.update(
+        HOME=str(nodedir / "home"), TMPDIR=str(nodedir / "tmp"),   # HOME also catches ~/.config, ~/.cache
+        TRITON_CACHE_DIR=str(nodedir / "triton"), TORCHINDUCTOR_CACHE_DIR=str(nodedir / "inductor"),
+        WANDB_DIR=str(wandb_dir), PYTHONDONTWRITEBYTECODE="1",
+    )
+    log.info("writes -> %s (per-node scratch %s; hf_cache + wandb shared)", workdir, nodedir)
 
     # Preflight gate: only start the (multi-day) run if the environment is sound. HF credentials are
     # ALWAYS required — the base model + dataset are downloaded from HF and the result is uploaded there —
@@ -665,7 +691,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     # run.sh does: HF base -> distcp convert (cached) + dataset download + torchrun training. Streamed so
     # we can update the W&B setup phases from run.sh's markers and hand the run off at training launch.
     try:
-        rc = stream_run_sh(["bash", str(run_sh)], env, code_root, logdir / "run.log", wb)
+        # cwd=workdir (writable /tmp), NOT code_root (the read-only baked /app/code) — so any relative-path
+        # write from run.sh/torchrun/the worker (e.g. W&B's default ./wandb) lands on the writable mount.
+        # run.sh locates itself + the SFT script via $BASH_SOURCE, so it doesn't depend on cwd.
+        rc = stream_run_sh(["bash", str(run_sh)], env, workdir, logdir / "run.log", wb)
     finally:
         if watcher is not None:
             # Stop the watcher. Its uploads self-terminate within upload_timeout, so this join is BOUNDED
