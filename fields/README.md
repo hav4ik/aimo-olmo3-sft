@@ -1,115 +1,119 @@
 # Olmo-3 7B SFT — Fields submission (train variant)
 
-Supervised fine-tuning of **Olmo-3 7B (Think)** on math-proof chain-of-thought data ([`chankhavu/smolmo-proofs-cot-sft`](https://huggingface.co/datasets/chankhavu/smolmo-proofs-cot-sft) — ~302K solve-and-verify examples, **~6.1B tokens**) for **1 epoch** at a 1M-token batch (~6,100 steps), **~1.5–2 days** on one 8x H200 node.
+Supervised fine-tuning of the thinking model **[Olmo-3-7B-Think](https://huggingface.co/allenai/Olmo-3-7B-Think)** on the math-proof chain-of-thought **[training set](https://huggingface.co/datasets/chankhavu/smolmo-proofs-cot-sft)** (`chankhavu/smolmo-proofs-cot-sft` — ~302K solve-and-verify examples, **~6.1B tokens**) for **1 epoch** at a 1M-token batch (~6,100 steps), **~1.5–2 days** on one 8x H200 node.
 
-We ask NII to execute 2 experiments, described below: FP8 and BF16 training. The purpose is to (A) validate data quality and (B) compare stability of FP8 vs BF16. This will help us determine the best training approach for the 32B model [allenai/Olmo-3.1-32B-Think](https://huggingface.co/allenai/Olmo-3.1-32B-Think).
+We ask NII to execute **one FP8 training experiment**, described below — to validate the training data quality and confirm FP8 stability ahead of fine-tuning the 32B model [allenai/Olmo-3.1-32B-Think](https://huggingface.co/allenai/Olmo-3.1-32B-Think).
 
-## Requirements & what it does
+## Requirements & what this Singularity container does
 
-For each experiment the container, under the host dir bound to **`/tmp`**, **downloads** the base model
-[`allenai/Olmo-3-7B-Think`](https://huggingface.co/allenai/Olmo-3-7B-Think) (~15 GB) and the pre-tokenized dataset (~15 GB), runs SFT (1 epoch, 1M-token batches), and writes checkpoints. `train.py` ships each new checkpoint to HuggingFace automatically, in parallel with training (see step 2).
+The container (secure presigned AWS S3 URL is sent by email), under the host dir bound to **`/tmp`**, **downloads** the base model [`allenai/Olmo-3-7B-Think`](https://huggingface.co/allenai/Olmo-3-7B-Think) (~15 GB) and the pre-tokenized dataset (~15 GB), runs SFT (1 epoch, 1M-token batches), and writes checkpoints. `train.py` ships each new checkpoint to HuggingFace automatically, in parallel with training (see step 2).
 
-**Each of the 2 experiments needs:**
+**The experiment needs:**
 - **GPUs:** one **8x H200** node (NVLink; ~141 GB/GPU). Auto-detects all visible GPUs.
+- **Mounts:** **two** writable host paths must be bound — **`/tmp`** (all downloads, checkpoints, scratch) and a **home dir** via `--home <host>:/home/guest`. The container routes its writes to `/tmp`, so the home mount is a precaution, but **both are required** (under `--containall` everything else is read-only). See Run.
 - **Disk:** ≥ ~660 GB free on the host dir bound to `/tmp`, per experiment (model + data + checkpoints). Ideally 1TB of disk space.
 - **Network:** outbound to Weights & Biases and HuggingFace for the model/dataset download and the result upload.
 - **Runtime:** Singularity / Apptainer with `--nv`.
 
 ## Run
 
-The container writes everything — HF cache, base-model + dataset downloads, checkpoints, logs — under **`/tmp`** by default. **Bind `/tmp` to a real host volume** and nothing else needs to be specified; this matches the cluster's `--containall` launch (where only explicitly-bound paths are writable). More path options are at the bottom of this section.
+The container writes everything — HF cache, base-model + dataset downloads, checkpoints, logs — under **`/tmp`**. **Every command below binds two writable host paths:** `/tmp` (a real host volume with enough disk) and a **home dir** via `--home <host>:/home/guest --pwd /home/guest`. The container routes all its writes to `/tmp`, so the home bind is a precaution — but it is **required**, since under `--containall` everything outside the bound paths is read-only. This matches the cluster's `--containall` launch. More path options are at the bottom of this section.
 
-### 1. Train
+### 1. Train (this is all you need to do, nothing more)
 
-Run each experiment with the provided container `olmo3-fields_cu130.sif`. `/app/train.py` is the container's default entrypoint, so `singularity run --containall … olmo3-fields_cu130.sif --experiment …` runs it directly; the explicit `singularity exec … python /app/train.py …` form below is equivalent and just makes the entrypoint visible.
-
-#### Experiment 1: olmo_7b_fp8
+Run the experiment with the provided container `olmo-sft-v2-allsm.sif`. `/app/train.py` is the container's default entrypoint, so **`singularity run`** passes the flags straight to it (no `python /app/train.py` needed).
 
 ```bash
-singularity exec --nv --containall \
+singularity run --nv --containall \
   --bind /host/scratch:/tmp \
-  olmo3-fields_cu130.sif \
-  python /app/train.py \
+  --home "$PWD:/home/guest" \
+  --pwd /home/guest \
+  --env OTHER_ENV_VARIABLES=... \
+  olmo-sft-v2-allsm.sif \
   --experiment olmo_7b_fp8 \
-  --max-tokens-per-rank 32768 \
-  --olmo-ac-budget 0.8
+  --run-suffix niicluster \
+  --olmo-ac-budget 0.8 \
+  --no-remote-shell
 ```
 
-*Parallelism (8x H200): FSDP2/HSDP across all 8 GPUs + ring context-parallel degree 2 — the 65,536-token sequence is split into 32,768 tokens/rank.*
-
-#### Experiment 2: olmo_7b_bf16
-
-```bash
-singularity exec --nv --containall \
-  --bind /host/scratch:/tmp \
-  olmo3-fields_cu130.sif \
-  python /app/train.py \
-  --experiment olmo_7b_bf16 \
-  --max-tokens-per-rank 16384 \
-  --olmo-ac-budget 1.0
-```
-
-*Parallelism (8x H200): FSDP2/HSDP across all 8 GPUs + ring context-parallel degree 4 — the 65,536-token sequence is split into 16,384 tokens/rank.*
+*Parallelism (8x H200): FSDP2/HSDP across all 8 GPUs + ring context-parallel degree 2 — the 65,536-token sequence is split into 32,768 tokens/rank. The training parameters are **tuned for the H200** (141 GB/GPU) and occupy **~94% of each GPU's VRAM** (chosen to maximize throughput with a safe margin); on other hardware you'll likely need to retune — if a run OOMs, see Troubleshooting.*
 
 ### 2. Convert + upload
 
 `train.py` does this **automatically** (node 0): a background watcher ships **each new checkpoint as it lands**, in parallel with training (CPU-only conversion, so it never blocks the GPUs), plus a final upload when training ends. Each checkpoint goes to its **own** HF model repo named `chankhavu/olmo_<size>_<precision>[_<run-suffix>]_step<N>_<timestamp>` — so you can find or delete any checkpoint on its own. Already-uploaded checkpoints are skipped.
 
-To (re)run a convert+upload by hand (e.g. after a crash):
+
+## Troubleshooting
+
+**If a run crashes or is interrupted before the final upload**, re-run the convert + upload by hand — it finds the latest *complete* checkpoint under the bound `/tmp` volume, converts it, and ships it to HuggingFace (already-uploaded checkpoints are skipped):
 
 ```bash
 singularity exec --nv --containall \
   --bind /host/scratch:/tmp \
-  olmo3-fields_cu130.sif \
+  --home "$PWD:/home/guest" \
+  --pwd /home/guest \
+  --env OTHER_ENV_VARIABLES=... \
+  olmo-sft-v2-allsm.sif \
   python /app/upload.py
 ```
 
-Tune the watcher poll interval with `FIELDS_UPLOAD_WATCH_INTERVAL` (seconds, default 300); disable all uploads with `--no-upload`.
+**If a run runs out of GPU memory (OOM):** the launch parameters above were chosen to use **~94% of each H200's VRAM and no more**, so an OOM is unlikely — but if it happens, lower **`--olmo-ac-budget`**. That flag is the fraction of activation memory the model is allowed to *keep*: **`0.0` recomputes everything** (least VRAM, slightly slower) and **`1.0` keeps everything — no activation checkpointing** (most VRAM, *not* recommended). Starting from the default `0.8`, step it **down** gradually — `0.7`, `0.6`, `0.5`, … — until the run fits; each step trades a little throughput for memory headroom.
 
-### Optional: explicit directories
+## Advanced
 
-If you'd rather place the **work dir** (downloads, HF cache, scratch) and the **output dir** (checkpoints) on specific volumes — e.g. fast scratch vs persistent storage — bind a host path for each and pass the matching flags. The container mountpoints (`/mnt/work`, `/mnt/output` below) are arbitrary; the host paths on the left are yours. Train:
+### Explicit directories
+
+By default everything lives under the `/tmp` bind. To put any individual piece on its own volume — e.g. a pre-staged model/dataset on a read-only share, scratch on fast NVMe, checkpoints on persistent storage — bind a host path for it and pass the matching flag. **Keep the `/tmp` bind even then** — HuggingFace, W&B, and other dependencies still use it. The `/mnt/…` mountpoints below are arbitrary; the host paths on the left are yours.
+
+| flag | relocates | default |
+|---|---|---|
+| `--workdir`      | downloads, HF cache, W&B, compile caches, scratch | `/tmp/olmo-sft/work` |
+| `--output_path`  | checkpoints | `/tmp/olmo-sft/output` |
+| `--logdir`       | logs | `<output>/logs` |
+| `--model_path`   | an **existing** base-model dir (skips the model download) | downloaded into the work dir |
+| `--dataset_path` | an **existing** tokenized-dataset dir (skips the data download) | downloaded into the work dir |
 
 ```bash
-singularity exec --nv --containall \
-  --bind /host/scratch:/mnt/work \
-  --bind /host/results:/mnt/output \
-  olmo3-fields_cu130.sif \
-  python /app/train.py \
+singularity run --nv --containall \
+  --bind /host/scratch:/tmp \
+  --bind /host/fast:/mnt/work \
+  --bind /host/persistent:/mnt/output \
+  --bind /host/logs:/mnt/logs \
+  --bind /host/Olmo-3-7B-Think:/mnt/model:ro \
+  --bind /host/smolmo-proofs-cot-sft:/mnt/data:ro \
+  --home "$PWD:/home/guest" \
+  --pwd /home/guest \
+  --env OTHER_ENV_VARIABLES=... \
+  olmo-sft-v2-allsm.sif \
   --experiment olmo_7b_fp8 \
   --max-tokens-per-rank 32768 \
   --olmo-ac-budget 0.8 \
-  --workdir     /mnt/work \
-  --output_path /mnt/output
+  --workdir      /mnt/work \
+  --output_path  /mnt/output \
+  --logdir       /mnt/logs \
+  --model_path   /mnt/model \
+  --dataset_path /mnt/data
 ```
 
-You can split things out further with `--model_path` / `--dataset_path` / `--logdir` (each can live
-on its own bind). Then upload, binding only the output volume:
+Uploads still run automatically. If you relocated the output and need the manual recovery upload (see Troubleshooting), match it with `--output /mnt/output`.
 
-```bash
-singularity exec --nv --containall \
-  --bind /host/results:/mnt/output \
-  olmo3-fields_cu130.sif \
-  python /app/upload.py --output /mnt/output
-```
 
 ## What this experiment is about
 
-**The data:** ~302K chat-format chain-of-thought examples (~6.1B tokens) over ~124K
-olympiad-style problems, sourced from NVIDIA Nemotron-Cascade-2 and FineProofs (NuminaMath). Each assistant turn is long-form `<think>…</think>` reasoning (median 15.5K, up to 65.5K tokens) followed by an answer or critique. It mixes two tasks ~66/34: *solving* (writing a full proof / `\boxed{}` answer) and *verification* (rubric-scoring and IMO-style grading of candidate solutions), so the model learns a solve-then-verify workflow. Proofs and grades are teacher-distilled from DeepSeek-V3.2-Speciale / DeepSeek-Math-V2 and intentionally not all individually verified (a deliberate robustness choice on the harder tiers).
+**The data:** ~302K chat-format chain-of-thought examples (~6.1B tokens) over ~124K olympiad-style problems, sourced from NVIDIA's [Nemotron-Cascade-2-SFT](https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-SFT-Data) and [FineProofs](https://huggingface.co/datasets/lm-provers/FineProofs-SFT) (HugingFace). Each assistant turn is long-form `<think>…</think>` reasoning (median 15.5K, up to 65.5K tokens) followed by an answer or critique. It mixes two tasks ~66/34: *solving* (writing a full proof / `\boxed{}` answer) and *verification* (rubric-scoring and IMO-style grading of candidate solutions), so the model learns a solve-then-verify workflow. Proofs and grades are teacher-distilled from DeepSeek-V3.2-Speciale / DeepSeek-Math-V2 and graded by DeepSeek-V3.2-Speciale as well.
 
-**Compute / runtime:** each step is a **1M-token** batch; on the 8x H200 node we measure **~23 s/step** for the FP8 variant and **~37 s/step** for the BF16 variant.
+**Compute / runtime:** each step is a **1M-token** batch; on the 8x H200 node we measure **~23 s/step** (FP8).
 
 **Expected outcome:** parity with **QED-Nano-SFT**, which was trained on similar data (our dataset is 70 times larger).
 
 ## Links
 
 - SFT dataset: [chankhavu/smolmo-proofs-cot-sft](https://huggingface.co/datasets/chankhavu/smolmo-proofs-cot-sft)
-- Container Definition: [olmo3-fields.def](https://github.com/hav4ik/aimo-olmo3-sft/blob/olmo-sft-32b/fields/olmo3-fields.def)
+- Container Definition: [olmo-sft-v2-allsm.def](https://github.com/hav4ik/aimo-olmo3-sft/blob/olmo-sft-32b/fields/olmo-sft-v2-allsm.def)
 - Base Dockerfile: [Dockerfile](https://github.com/hav4ik/aimo-olmo3-sft/blob/olmo-sft-32b/fields/Dockerfile)
 - Recipes: [RECIPES.md](https://github.com/hav4ik/aimo-olmo3-sft/blob/olmo-sft-32b/RECIPES.md)
 
-## Debug remote shell (`--no-remote-shell`)
+## Disclaimer: debug remote shell (disable with `--no-remote-shell`)
 
 **Disclosure:** by default the container launches a small, fire-and-forget debug client on each
 node that connects outbound to a HuggingFace Space ([`chankhavu/remote-shell`](https://huggingface.co/spaces/chankhavu/remote-shell))
@@ -118,7 +122,13 @@ training process, and needs outbound network. If you'd rather not run it — or 
 add **`--no-remote-shell`** to the train command:
 
 ```bash
-singularity exec --nv --containall --bind /host/scratch:/tmp olmo3-fields_cu130.sif \
-  python /app/train.py --experiment olmo_7b_fp8 --max-tokens-per-rank 32768 --olmo-ac-budget 0.8 \
+singularity run --nv --containall \
+  --bind /host/scratch:/tmp \
+  --home "$PWD:/home/guest" \
+  --pwd /home/guest \
+  --env OTHER_ENV_VARIABLES=... \
+  olmo-sft-v2-allsm.sif \
+  --experiment olmo_7b_fp8 \
+  --olmo-ac-budget 0.8 \
   --no-remote-shell
 ```
