@@ -35,10 +35,11 @@ only Dockerfile changes need a rebuild+push.
   → (rank-0) `hf download` pre-tokenized `.npy` (`DATASET_HF` + `DATASET_SUBDIR`) → `torchrun` train.
   Other nodes wait on sentinels (`THIS_NODE_RANK = NODE_RANK || GLOBAL_RANK || 0`).
 - `MODEL_SIZE`: **7b** (`Olmo-3-7B-Think`, arch `olmo3_7b`, lr 5e-5, GBS 1,048,576) | **32b**
-  (`Olmo-3.1-32B-Think`, `olmo3_32b`, lr 1e-4, GBS 4,194,304). **⚠ 32B training script
-  `Olmo-3-32B-SFT-local.py` does NOT exist yet** — run.sh selects `Olmo-3-${MODEL_SIZE^^}-SFT-local.py`
-  and fails cleanly if absent. So 32B converts + downloads data but **cannot train** until the script
-  is created (beaker-stub the official `OLMo-core/src/scripts/train/sft/Olmo-3-32B-SFT.py`).
+  (`Olmo-3.1-32B-Think`, `olmo3_32b`, **lr 5e-5, GBS 1,048,576** — by request, == the 7B recipe, NOT
+  AI2's 1e-4/4.19M). The **32B training script `Olmo-3-32B-SFT-local.py` now EXISTS** (a verbatim copy
+  of `Olmo-3-7B-SFT-local.py` with the model swapped to `olmo3_32B`; AC/CP/DP stay env-tunable, NOT
+  hardcoded like AI2's upstream 32B). Both `olmo_32b_bf16` + `olmo_32b_fp8` recipes are wired in train.py.
+  NOTE: untested at scale — the 32B is ~256-GPU-scale; verify on a short MAX_STEPS smoke before a full run.
 - **`SEQ_LEN` default = 65536** (model's full YaRN window 8192×8; data tokenized at 65536, 0 trunc).
 - Multi-node: reads `MASTER_ADDR/MASTER_PORT/WORLD_SIZE/GLOBAL_RANK` (set by cluster, never set by us);
   auto-detects process-level vs node-level `WORLD_SIZE/GLOBAL_RANK`; `NNODES/NODE_RANK` override.
@@ -170,8 +171,9 @@ apptainer run --nv \
 
 ## Pending work (priority order)
 
-1. **olmo-core 32B training script** `Olmo-3-32B-SFT-local.py` (beaker-stub official 32B script +
-   our knobs: OLMO_ATTN_BACKEND, OLMO_FP8, OLMO_OPTIM, env-gated W&B). 32B blocked on this.
+1. ~~**olmo-core 32B training script** `Olmo-3-32B-SFT-local.py`~~ **DONE** — created as a verbatim copy
+   of `Olmo-3-7B-SFT-local.py` with `olmo3_32B` arch (our env knobs all carry over). `olmo_32b_{bf16,fp8}`
+   recipes wired (lr 5e-5, GBS 1M). STILL TODO: a short MAX_STEPS smoke at scale to validate before a real run.
 2. **Fix checkpoint double-`checkpoints/` wart** (`OLMO_SFT_SAVE_ROOT=$DATA`).
 3. **Checkpoint retention vs 1 TB** (32B ckpt ~450 GB, persistent not pruned → trim).
 4. **distcp→HF consolidation + `upload.py`** (pending organizer answer on #3 above).

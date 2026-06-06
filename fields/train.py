@@ -86,7 +86,11 @@ RECIPES: dict[str, Recipe] = {
     # "1b" to Olmo-2-1B-SFT-local.py + --model-arch olmo2_1b_v2. Small seq_len + global batch so it fits.
     "olmo_1b_bf16": Recipe("1b", "bf16", "allenai/OLMo-2-0425-1B-Instruct", 5e-5,
                            seq_len=4096, default_global_batch=4096),
-    # 32B recipes are added once the 7B submission passes (lr 1e-4, GBS 4,194,304).
+    # 32B: FURTHER SFT of allenai/Olmo-3.1-32B-Think. lr 5e-5 + 1M-token global batch (== the 7B recipe,
+    # by request — NOT AI2's 1e-4/4.19M). Uses Olmo-3-32B-SFT-local.py (= the 7B-local script with the
+    # olmo3_32B arch; AC/CP/DP stay env-tunable). default_global_batch=0 => the 1,048,576 CLI default.
+    "olmo_32b_bf16": Recipe("32b", "bf16", "allenai/Olmo-3.1-32B-Think", 5e-5),
+    "olmo_32b_fp8": Recipe("32b", "fp8", "allenai/Olmo-3.1-32B-Think", 5e-5),
 }
 
 # Per-GPU activation-token cap that sets cp_degree (cp = smallest pow2 with seq_len/cp <= this), mirroring
