@@ -401,10 +401,12 @@ def upload_watcher(output: Path, seq_len: int, interval: float, stop: threading.
     log.info("upload watcher started (poll every %ds, %.0fmin/upload cap, CPU-only, ships each new checkpoint)",
              int(interval), timeout / 60.0)
     while not stop.wait(interval):  # sleep first (no checkpoint exists at step 0), wake early on stop
-        # Stay completely silent until a checkpoint dir exists — during the long download/convert setup
-        # there's nothing to ship, and spawning upload.py just to have it say "nothing yet" is noise that
-        # can look alarming in the container log.
+        # Until a checkpoint dir exists, don't spawn upload.py (which would throw a no-checkpoint
+        # traceback during the long download/convert setup). Instead log a calm heartbeat — a clear
+        # "alive and waiting" line, so the empty pre-training phase doesn't look like a hang or a crash.
         if not any(output.rglob("step*")):
+            log.info("upload watcher: no checkpoint under %s yet — waiting (first save lands after "
+                     "model/data download + convert)", output)
             continue
         try:
             run_upload(output, seq_len, cpu_only=True, quiet=True, timeout=timeout)
