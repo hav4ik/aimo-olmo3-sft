@@ -45,4 +45,4 @@ singularity sif new "$OUT"
 singularity sif add "$OUT" "$SQUASH" --datatype 4 --parttype 2 --partfs 1 --partarch 2
 
 echo ">> Done."; singularity sif list "$OUT"; ls -lh "$OUT"
-echo ">> Verify: singularity run $OUT --help   (and: singularity exec --nv --bind <host>:/data/training $OUT python /app/smoke_test.py)"
+echo ">> Verify: singularity run $OUT --help   (and: singularity exec --nv --containall --bind <host>:/tmp $OUT python /app/smoke_test.py)"

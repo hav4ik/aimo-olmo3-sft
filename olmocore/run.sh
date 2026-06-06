@@ -47,6 +47,25 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # this script's dir (clon
 # rank 0 in BOTH conventions (node-level GLOBAL_RANK=0, or process-level base rank 0).
 THIS_NODE_RANK="${NODE_RANK:-${GLOBAL_RANK:-0}}"
 
+# Retry a (resumable) download with exponential backoff. huggingface_hub already retries individual
+# files/chunks on 429/5xx + resumes from cache; this wraps the WHOLE `hf download` so a sustained
+# rate-limit or a transient that exhausts the library's budget gets a fresh, cache-resuming attempt.
+# Tune with HF_DOWNLOAD_RETRIES (default 5). Backoff: 10s,20s,40s,… capped at 300s.
+hf_retry() {
+    local max="${HF_DOWNLOAD_RETRIES:-5}" n=1 wait=10 rc
+    until "$@"; do
+        rc=$?
+        if [ "$n" -ge "$max" ]; then
+            echo "[olmocore] download failed after $max attempts (exit $rc): $*" >&2
+            return "$rc"
+        fi
+        echo "[olmocore] download attempt $n/$max failed (exit $rc); retrying in ${wait}s…" >&2
+        sleep "$wait"
+        n=$((n + 1)); wait=$((wait * 2))
+        if [ "$wait" -gt 300 ]; then wait=300; fi
+    done
+}
+
 # One-time HF -> OLMo-core distcp conversion, cached on the /data/training volume. OLMo-core
 # can't load HF weights directly; the distcp format reshards on LOAD, so this single-process
 # convert loads onto any GPU/node count later. Same image converts AND loads => self-consistent
@@ -66,7 +85,7 @@ if [ "${STAGE:-train}" = "convert" ] || [ ! -f "$CONVERT_DONE" ]; then
         if [ ! -d "$HF_MODEL" ]; then
             CONV_SRC="$DATA/hf_models/$HF_MODEL"
             echo "[olmocore] staging HF model $HF_MODEL -> $CONV_SRC"
-            hf download "$HF_MODEL" --local-dir "$CONV_SRC"
+            hf_retry hf download "$HF_MODEL" --local-dir "$CONV_SRC"
         fi
         python /workspace/OLMo-core/src/examples/huggingface/convert_checkpoint_from_hf.py \
             --checkpoint-input-path "$CONV_SRC" --model-arch "${MODEL_ARCH:-olmo3_7b}" \
@@ -145,7 +164,7 @@ if ! ls "$DATASET"/token_ids_part_*.npy >/dev/null 2>&1; then
         HF_ARGS=(--repo-type dataset --local-dir "$DL_DIR")
         [ -n "$SUB" ] && HF_ARGS+=(--include "$SUB/*")
         [ -n "${DATASET_REVISION:-}" ] && HF_ARGS+=(--revision "$DATASET_REVISION")
-        hf download "$DATASET_HF" "${HF_ARGS[@]}"
+        hf_retry hf download "$DATASET_HF" "${HF_ARGS[@]}"
         ls "$DATASET"/token_ids_part_*.npy >/dev/null 2>&1 || { echo "ERROR: $DATASET_HF (subdir ${SUB:-/}) has no token_ids_part_*.npy at $DATASET"; exit 3; }
         touch "$DATA_READY"
         echo "[olmocore] data ready: $DATASET"

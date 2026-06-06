@@ -32,10 +32,14 @@ RUN pip install --no-cache-dir "gradio_client>=1.3"
 # SECRETS.json. secrets_loader reads /app/SECRETS.json only; /app/SECRETS.example.json is inert.
 COPY fields/SECRETS*.json /app/
 
+# Defaults live UNDER /tmp — the dir the cluster always binds (e.g. `singularity run --containall
+# --bind <host>:/tmp …`), so downloads/checkpoints land on a real volume even when nothing else is
+# bound. Override with --workdir/--output (or FIELDS_WORKDIR/FIELDS_OUTPUT/HF_HOME).
 ENV FIELDS_CODE_ROOT=/app/code \
     OLMO_CORE_ROOT=/workspace/OLMo-core \
-    FIELDS_WORKDIR=/data/training/work \
-    FIELDS_OUTPUT=/data/training/output
+    FIELDS_WORKDIR=/tmp/olmo-sft/work \
+    FIELDS_OUTPUT=/tmp/olmo-sft/output \
+    HF_HOME=/tmp/olmo-sft/hf_cache
 WORKDIR /app
 # train.py is the entrypoint; `docker run <img> --experiment olmo_7b_bf16 ...` passes flags straight in.
 ENTRYPOINT ["python", "/app/train.py"]

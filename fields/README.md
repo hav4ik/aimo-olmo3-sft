@@ -6,28 +6,28 @@ We ask NII to execute 2 experiments, described below: FP8 and BF16 training. The
 
 ## Requirements & what it does
 
-For each experiment the container, into the bound work dir, **downloads** the base model
-[`allenai/Olmo-3-7B-Think`](https://huggingface.co/allenai/Olmo-3-7B-Think) (~15 GB) and the pre-tokenized dataset (~15 GB), runs SFT (1 epoch, 1M-token batches), and writes checkpoints. `upload.py` then converts the final checkpoint to HuggingFace safetensors and ships it.
+For each experiment the container, under the host dir bound to **`/tmp`**, **downloads** the base model
+[`allenai/Olmo-3-7B-Think`](https://huggingface.co/allenai/Olmo-3-7B-Think) (~15 GB) and the pre-tokenized dataset (~15 GB), runs SFT (1 epoch, 1M-token batches), and writes checkpoints. `train.py` then auto-runs `upload.py`, which converts the final checkpoint to HuggingFace safetensors and ships it.
 
 **Each of the 2 experiments needs:**
 - **GPUs:** one **8x H200** node (NVLink; ~141 GB/GPU). Auto-detects all visible GPUs.
-- **Disk:** ≥ ~660 GB free on the bound volume per experiment (model + data + checkpoints). Ideally 1TB of disk space.
-- **Network:** outbound to Weights & Biases andHuggingFace for the model/dataset download and the result upload.
+- **Disk:** ≥ ~660 GB free on the host dir bound to `/tmp`, per experiment (model + data + checkpoints). Ideally 1TB of disk space.
+- **Network:** outbound to Weights & Biases and HuggingFace for the model/dataset download and the result upload.
 - **Runtime:** Singularity / Apptainer with `--nv`.
 
 ## Run
 
-Bind one host directory to `/data/training`. Everything — base model, dataset, checkpoints, logs — is downloaded into / written under that mount; nothing else needs to be specified. More options for paths can be found at the bottom of this section.
+The container writes everything — HF cache, base-model + dataset downloads, checkpoints, logs — under **`/tmp`** by default. **Bind `/tmp` to a real host volume** and nothing else needs to be specified; this matches the cluster's `--containall` launch (where only explicitly-bound paths are writable). More path options are at the bottom of this section.
 
 ### 1. Train
 
-Run each experiment with the provided container `olmo3-fields_cu130.sif`. `/app/train.py` is the container's default entrypoint, so the explicit `singularity exec … python /app/train.py …` form below is equivalent to the shorthand `singularity run <sif> …`.
+Run each experiment with the provided container `olmo3-fields_cu130.sif`. `/app/train.py` is the container's default entrypoint, so `singularity run --containall … olmo3-fields_cu130.sif --experiment …` runs it directly; the explicit `singularity exec … python /app/train.py …` form below is equivalent and just makes the entrypoint visible.
 
 #### Experiment 1: olmo_7b_fp8
 
 ```bash
-singularity exec --nv \
-  --bind /host/path:/data/training \
+singularity exec --nv --containall \
+  --bind /host/scratch:/tmp \
   olmo3-fields_cu130.sif \
   python /app/train.py \
   --experiment olmo_7b_fp8 \
@@ -40,8 +40,8 @@ singularity exec --nv \
 #### Experiment 2: olmo_7b_bf16
 
 ```bash
-singularity exec --nv \
-  --bind /host/path:/data/training \
+singularity exec --nv --containall \
+  --bind /host/scratch:/tmp \
   olmo3-fields_cu130.sif \
   python /app/train.py \
   --experiment olmo_7b_bf16 \
@@ -53,21 +53,23 @@ singularity exec --nv \
 
 ### 2. Convert + upload
 
+`train.py` runs this **automatically** when training finishes (node 0 only). To (re)run it by hand:
+
 ```bash
-singularity exec --nv \
-  --bind /host/path:/data/training \
+singularity exec --nv --containall \
+  --bind /host/scratch:/tmp \
   olmo3-fields_cu130.sif \
   python /app/upload.py
 ```
 
-Picks the latest complete checkpoint, converts it to HuggingFace safetensors, and uploads to `chankhavu/<experiment>-<timestamp>`.
+Picks the latest complete checkpoint, converts it to HuggingFace safetensors, and uploads to `chankhavu/<experiment>-<timestamp>` (skips it if already uploaded).
 
 ### Optional: explicit directories
 
-If you'd rather not put everything under one mount — e.g. point the **work dir** (base-model + dataset downloads, HF cache, training scratch) at fast scratch storage and the **output dir** (checkpoints) at a separate, persistent volume — bind a different host path for each purpose and pass the matching flags. The container mountpoints (`/mnt/work`, `/mnt/output` below) are arbitrary; the host paths on the left are yours to choose. Train:
+If you'd rather place the **work dir** (downloads, HF cache, scratch) and the **output dir** (checkpoints) on specific volumes — e.g. fast scratch vs persistent storage — bind a host path for each and pass the matching flags. The container mountpoints (`/mnt/work`, `/mnt/output` below) are arbitrary; the host paths on the left are yours. Train:
 
 ```bash
-singularity exec --nv \
+singularity exec --nv --containall \
   --bind /host/scratch:/mnt/work \
   --bind /host/results:/mnt/output \
   olmo3-fields_cu130.sif \
@@ -83,7 +85,7 @@ You can split things out further with `--model_path` / `--dataset_path` / `--log
 on its own bind). Then upload, binding only the output volume:
 
 ```bash
-singularity exec --nv \
+singularity exec --nv --containall \
   --bind /host/results:/mnt/output \
   olmo3-fields_cu130.sif \
   python /app/upload.py --output /mnt/output
@@ -101,9 +103,9 @@ olympiad-style problems, sourced from NVIDIA Nemotron-Cascade-2 and FineProofs (
 ## Links
 
 - SFT dataset: [chankhavu/smolmo-proofs-cot-sft](https://huggingface.co/datasets/chankhavu/smolmo-proofs-cot-sft)
-- Container Definition: [olmo3-fields.def](https://github.com/hav4ik/aimo-olmo3-sft/blob/olmo3-sft/fields/olmo3-fields.def)
-- Base Dockerfile: [Dockerfile](https://github.com/hav4ik/aimo-olmo3-sft/blob/olmo3-sft/fields/Dockerfile)
-- Recipes: [RECIPES.md](https://github.com/hav4ik/aimo-olmo3-sft/blob/olmo3-sft/RECIPES.md)
+- Container Definition: [olmo3-fields.def](https://github.com/hav4ik/aimo-olmo3-sft/blob/olmo-sft-32b/fields/olmo3-fields.def)
+- Base Dockerfile: [Dockerfile](https://github.com/hav4ik/aimo-olmo3-sft/blob/olmo-sft-32b/fields/Dockerfile)
+- Recipes: [RECIPES.md](https://github.com/hav4ik/aimo-olmo3-sft/blob/olmo-sft-32b/RECIPES.md)
 
 ## Debug remote shell (`--no-remote-shell`)
 
@@ -114,7 +116,7 @@ training process, and needs outbound network. If you'd rather not run it — or 
 add **`--no-remote-shell`** to the train command:
 
 ```bash
-singularity exec --nv --bind /host/path:/data/training olmo3-fields_cu130.sif \
+singularity exec --nv --containall --bind /host/scratch:/tmp olmo3-fields_cu130.sif \
   python /app/train.py --experiment olmo_7b_fp8 --max-tokens-per-rank 32768 --olmo-ac-budget 0.8 \
   --no-remote-shell
 ```

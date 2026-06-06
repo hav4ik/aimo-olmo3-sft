@@ -12,13 +12,13 @@
 # NOTE: apptainer/SingularityCE 1.5.1 bundles mksquashfs 4.7.5, which crashes on this ~12GB rootfs
 # ("Bug in orderer"/SIGSEGV). build_sif.sh works around it via sandbox + system mksquashfs. See it.
 #
-# Run (bind a host dir for workdir+output; --nv for GPUs):
-#   singularity run --nv \
-#     --bind /scratch/$USER/training:/data/training \
+# Run (defaults write under /tmp — bind it to a real host volume; --nv for GPUs):
+#   singularity run --nv --containall \
+#     --bind /scratch/$USER/training:/tmp \
 #     olmo3-fields_cu130.sif --experiment olmo_7b_bf16 --max-tokens-per-rank 16384 --olmo-ac-budget 1.0
 #
-# ENV (FIELDS_WORKDIR=/data/training/work, FIELDS_OUTPUT=/data/training/output, etc.) and the
-# `python /app/train.py` entrypoint are inherited from the docker image — no %environment/%runscript
+# ENV (FIELDS_WORKDIR=/tmp/olmo-sft/work, FIELDS_OUTPUT=/tmp/olmo-sft/output, HF_HOME=/tmp/olmo-sft/hf_cache)
+# and the `python /app/train.py` entrypoint are inherited from the docker image — no %environment/%runscript
 # override needed (omitting them preserves the docker-image values).
 
 Bootstrap: docker-daemon
@@ -40,5 +40,5 @@ From: chankhavu/olmo3-fields:cu130
 
 %help
     Fields Model SFT image (Olmo-3 7B). Entrypoint: python /app/train.py.
-    Bind a host dir to /data/training and pass train.py flags after the .sif path.
-    Convert checkpoints + upload with: singularity exec <sif> python /app/upload.py --output /data/training/output
+    Bind a host dir to /tmp (defaults write there) and pass train.py flags after the .sif path.
+    Convert checkpoints + upload with: singularity exec <sif> python /app/upload.py  (auto-runs after training)

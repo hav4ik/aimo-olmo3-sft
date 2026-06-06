@@ -6,11 +6,10 @@ You pass ONLY the train.py output dir (``--output``); this script does the rest:
   2. converts it to a HuggingFace safetensors model at ``<output>/model`` — with the legacy
      ``rope_scaling`` + ``rope_theta`` config (transformers 4.x / vLLM / sglang compatible) and
      HF-convention sharding (model-0000i-of-0000N + index for >5 GB), and
-  3. uploads ``<output>/model``:
-       * by DEFAULT to our HuggingFace namespace, auto-named ``chankhavu/<base>-<YYYYMMDDHHMMSS>`` — the
-         base comes from the run's experiment; ``--hf_dataset`` only overrides the base name, and any
-         namespace in it is ignored (so it can't be pushed to the wrong place or collide); or
-       * to a presigned AWS S3 URL via ``--hf_dataset none --s3_url <url>`` (tar.gz + PUT, single ≤ 5 GB).
+  3. uploads ``<output>/model`` to our HuggingFace namespace, auto-named
+     ``chankhavu/<base>-<YYYYMMDDHHMMSS>`` — the base comes from the run's experiment; ``--hf_dataset``
+     only overrides the base name, and any namespace in it is ignored (so it can't be pushed to the
+     wrong place or collide).
 
 ``--skip-convert`` uploads an existing ``<output>/model`` as-is (e.g. to re-ship without reconverting).
 
@@ -18,7 +17,6 @@ Examples::
 
     HF_TOKEN=hf_xxx python /app/upload.py --output /results              # -> chankhavu/<experiment>-<ts>
     HF_TOKEN=hf_xxx python /app/upload.py --output /results --hf_dataset olmo3-7b   # chankhavu/olmo3-7b-<ts>
-    python /app/upload.py --output /results --hf_dataset none --s3_url https://...  # -> S3
 """
 from __future__ import annotations
 
@@ -31,8 +29,7 @@ import re
 import struct
 import subprocess
 import sys
-import tarfile
-import tempfile
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -46,12 +43,10 @@ except ImportError:
 OLMO_CORE_ROOT = Path(os.environ.get("OLMO_CORE_ROOT", "/workspace/OLMo-core"))
 CONVERT_TO_HF = OLMO_CORE_ROOT / "src" / "examples" / "huggingface" / "convert_checkpoint_to_hf.py"
 TOKENIZER = "dolma2"
-DEFAULT_OUTPUT = os.environ.get("FIELDS_OUTPUT", "/data/training/output")
-DEFAULT_S3_URL = os.environ.get("FIELDS_S3_URL", "")  # bake the presigned PUT URL here (or FIELDS_S3_URL)
+DEFAULT_OUTPUT = os.environ.get("FIELDS_OUTPUT", "/tmp/olmo-sft/output")
 # The HF upload ALWAYS lands here, no matter what the caller passes — so organizers can't push it to the
 # wrong namespace or collide a name. The repo id is forced to <HF_NAMESPACE>/<base>-<YYYYMMDDHHMMSS>.
 HF_NAMESPACE = os.environ.get("FIELDS_HF_NAMESPACE", "chankhavu")
-S3_SINGLE_PUT_LIMIT = 5 * 1024**3  # AWS hard cap for a single (non-multipart) PUT
 
 log = logging.getLogger("fields.upload")
 
@@ -75,12 +70,23 @@ def _step_num(p: Path) -> int:
     return int(digits) if digits else -1
 
 
-def find_final_checkpoint(output: Path) -> Path:
+UPLOAD_MARKER = "upload_successful.txt"
+
+
+class AlreadyUploaded(Exception):
+    """The highest complete checkpoint already carries upload_successful.txt — nothing new to ship."""
+
+
+def find_final_checkpoint(output: Path, skip_uploaded: bool = True) -> Path:
     """Return the highest-step COMPLETE distcp checkpoint under the output dir — the final one if training
     finished, or the LATEST SURVIVABLE one if it crashed / was stopped early. A checkpoint counts as
     complete only when DCP's model_and_optim/.metadata (written LAST, after every shard) and config.json
     are both present, so a half-written in-progress save at the moment of a crash is skipped, not picked.
-    The converter is handed the stepN ROOT (it reads config.json and appends model_and_optim itself)."""
+    The converter is handed the stepN ROOT (it reads config.json and appends model_and_optim itself).
+
+    If skip_uploaded (default) and the highest complete checkpoint already has UPLOAD_MARKER, raise
+    AlreadyUploaded — we deliberately do NOT fall back to an older one (that would re-ship a stale
+    checkpoint). Pass skip_uploaded=False to locate it regardless (e.g. just to write the marker)."""
     steps = sorted(output.rglob("step*"), key=_step_num)
 
     def has_config(s: Path) -> bool:
@@ -96,6 +102,8 @@ def find_final_checkpoint(output: Path) -> Path:
         raise FileNotFoundError(f"no step* checkpoint under {output} (did training save one?)")
 
     chosen = complete[-1]
+    if skip_uploaded and (chosen / UPLOAD_MARKER).exists():
+        raise AlreadyUploaded(chosen.name)
     skipped = [s.name for s in steps if _step_num(s) > _step_num(chosen)]
     if skipped:
         log.warning("using %s (latest COMPLETE checkpoint); skipped later incomplete one(s): %s",
@@ -204,49 +212,55 @@ def hf_repo_id(base: str) -> str:
     return f"{HF_NAMESPACE}/{name}-{ts}"
 
 
-def upload_hf(repo_id: str, repo_type: str, source_dir: Path, path_in_repo: str, private: bool) -> None:
-    """Upload a folder to a HuggingFace repo (multipart/resumable, handles large weights)."""
-    from huggingface_hub import HfApi  # imported here so S3-only runs don't require it
+def upload_hf(repo_id: str, repo_type: str, source_dir: Path, path_in_repo: str, private: bool,
+              retries: int = 5, backoff: float = 10.0, max_wait: float = 300.0) -> None:
+    """Upload a folder to a HuggingFace repo (multipart/resumable, handles large weights), retrying on
+    transient failures (network blips, 429 rate-limit, 5xx). upload_folder is resumable — already-pushed
+    LFS files are skipped on retry — so re-calling is cheap. Auth/permission errors (401/403) are NOT
+    retried (a token problem won't fix itself). Backoff is exponential: backoff * 2**(n-1), capped at max_wait."""
+    from huggingface_hub import HfApi
 
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
     if not token:
         raise RuntimeError("HF_TOKEN (or HUGGING_FACE_HUB_TOKEN) must be set to upload to HuggingFace")
     api = HfApi(token=token)
-    api.create_repo(repo_id=repo_id, repo_type=repo_type, private=private, exist_ok=True)
-    log.info("uploading %s -> hf://%s/%s (%s)%s", source_dir, repo_type, repo_id,
-             "private" if private else "public", f" path={path_in_repo}" if path_in_repo else "")
-    api.upload_folder(repo_id=repo_id, repo_type=repo_type, folder_path=str(source_dir),
-                      path_in_repo=path_in_repo or None)
-    log.info("HuggingFace upload complete -> %s/%s",
-             "datasets" if repo_type == "dataset" else "models", repo_id)
+    dest = f"{'datasets' if repo_type == 'dataset' else 'models'}/{repo_id}"
+    attempts = max(1, retries)
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, attempts + 1):
+        try:
+            api.create_repo(repo_id=repo_id, repo_type=repo_type, private=private, exist_ok=True)
+            log.info("uploading %s -> hf://%s (%s)%s [attempt %d/%d]", source_dir, dest,
+                     "private" if private else "public",
+                     f" path={path_in_repo}" if path_in_repo else "", attempt, attempts)
+            api.upload_folder(repo_id=repo_id, repo_type=repo_type, folder_path=str(source_dir),
+                              path_in_repo=path_in_repo or None)
+            log.info("HuggingFace upload complete -> %s", dest)
+            return
+        except Exception as exc:  # noqa: BLE001 — retry transient hub/network failures
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status in (401, 403):
+                raise RuntimeError(f"HuggingFace auth/permission error ({status}) on {dest} — "
+                                   f"check HF_TOKEN; not retrying") from exc
+            last_exc = exc
+            if attempt >= attempts:
+                break
+            wait = min(max_wait, backoff * (2 ** (attempt - 1)))
+            log.warning("upload attempt %d/%d failed (%s) — retrying in %.0fs", attempt, attempts, exc, wait)
+            time.sleep(wait)
+    raise RuntimeError(f"HuggingFace upload to {dest} failed after {attempts} attempts: {last_exc}")
 
 
-def make_tarball(source_dir: Path, archive_path: Path) -> Path:
-    """Pack source_dir into a .tar.gz (the single object PUT to the presigned URL)."""
-    log.info("packing %s -> %s", source_dir, archive_path)
-    with tarfile.open(archive_path, "w:gz") as tar:
-        tar.add(str(source_dir), arcname=source_dir.name)
-    return archive_path
-
-
-def upload_s3(url: str, source_dir: Path, archive_name: str) -> None:
-    """tar.gz the dir and HTTP-PUT it to the presigned S3 URL."""
-    import requests  # imported here so HF-only runs don't require it
-
-    with tempfile.TemporaryDirectory() as tmp:
-        name = archive_name or f"{source_dir.name}.tar.gz"
-        archive = make_tarball(source_dir, Path(tmp) / name)
-        size = archive.stat().st_size
-        log.info("archive size: %.2f GiB", size / 1024**3)
-        if size > S3_SINGLE_PUT_LIMIT:
-            log.warning("archive %.2f GiB exceeds the 5 GiB single-PUT presigned limit — this PUT will "
-                        "likely fail; use --hf_dataset for large weights, or a multipart presigned URL.",
-                        size / 1024**3)
-        with archive.open("rb") as fh:
-            resp = requests.put(url, data=fh, headers={"Content-Type": "application/gzip"})
-        if not resp.ok:
-            raise RuntimeError(f"S3 PUT failed: HTTP {resp.status_code} {resp.text[:300]}")
-        log.info("S3 upload complete (HTTP %d)", resp.status_code)
+def write_success_marker(checkpoint: Path, destination: str) -> None:
+    """Drop a small upload_successful.txt into the checkpoint dir after a successful convert+upload, so a
+    re-run or external orchestrator can tell this checkpoint was already shipped (and to where)."""
+    marker = checkpoint / UPLOAD_MARKER
+    try:
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        marker.write_text(f"uploaded {ts}\ndestination: {destination}\n")
+        log.info("wrote upload marker -> %s", marker)
+    except Exception as exc:  # noqa: BLE001 — marker must not fail an otherwise-successful upload
+        log.warning("could not write upload marker (%s)", exc)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -268,15 +282,14 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     # HF target
     p.add_argument("--hf_dataset", default=os.environ.get("FIELDS_HF_DATASET", ""),
                    help=f"Base NAME for the HF upload — namespace is ignored and forced to "
-                        f"{HF_NAMESPACE}/<name>-<YYYYMMDDHHMMSS>. Empty => name from the run's experiment. "
-                        "'none' => upload to S3 instead.")
-    p.add_argument("--hf_repo_type", default="dataset", choices=["dataset", "model"], help="HF repo type.")
+                        f"{HF_NAMESPACE}/<name>-<YYYYMMDDHHMMSS>. Empty => name from the run's experiment.")
+    p.add_argument("--hf_repo_type", default="model", choices=["model", "dataset"], help="HF repo type.")
     p.add_argument("--hf_path_in_repo", default="", help="Subpath inside the HF repo (default: root).")
     p.add_argument("--hf_private", action="store_true", default=False, help="Create the HF repo private.")
     p.add_argument("--hf_public", dest="hf_private", action="store_false", help="Create the HF repo public (default).")
-    # S3 target
-    p.add_argument("--s3_url", default=DEFAULT_S3_URL, help="Presigned S3 PUT URL (baked default). Used when --hf_dataset is unset.")
-    p.add_argument("--archive_name", default="", help="Name for the S3 tar.gz (default: model.tar.gz).")
+    p.add_argument("--retries", "--upload-retries", dest="retries", type=int,
+                   default=int(os.environ.get("FIELDS_UPLOAD_RETRIES", "5")),
+                   help="Retry the HF upload this many times on transient failures (rate-limit / network).")
     return p.parse_args(argv)
 
 
@@ -288,23 +301,34 @@ def main(argv: Optional[list[str]] = None) -> int:
     output = Path(args.output).resolve()
     hf_model = output / "model"
 
+    checkpoint: Optional[Path] = None
     if not args.skip_convert:
-        checkpoint = find_final_checkpoint(output)
+        try:
+            checkpoint = find_final_checkpoint(output)
+        except AlreadyUploaded as already:
+            log.info("latest checkpoint step%s already uploaded (%s present) — nothing new to ship",
+                     already, UPLOAD_MARKER)
+            return 0
         log.info("final checkpoint: %s", checkpoint)
         convert_checkpoint(checkpoint, hf_model, args.seq_len, parse_size(args.shard_size))
 
     if not hf_model.is_dir():
         raise FileNotFoundError(f"no HF model at {hf_model} — run without --skip-convert, or check --output")
 
-    # Target: our HuggingFace namespace by default, auto-named <HF_NAMESPACE>/<base>-<timestamp>.
-    # Pass --hf_dataset none (+ --s3_url) to use S3 instead.
-    if args.hf_dataset.strip().lower() in ("none", "off"):
-        if not args.s3_url:
-            raise SystemExit("HF disabled (--hf_dataset none) but no --s3_url given.")
-        upload_s3(args.s3_url, hf_model, args.archive_name)
-    else:
-        repo = hf_repo_id(args.hf_dataset.strip() or default_base_name(output))
-        upload_hf(repo, args.hf_repo_type, hf_model, args.hf_path_in_repo, args.hf_private)
+    # Target: our HuggingFace namespace, auto-named <HF_NAMESPACE>/<base>-<timestamp>.
+    repo = hf_repo_id(args.hf_dataset.strip() or default_base_name(output))
+    upload_hf(repo, args.hf_repo_type, hf_model, args.hf_path_in_repo, args.hf_private, retries=args.retries)
+    destination = f"hf://{'datasets' if args.hf_repo_type == 'dataset' else 'models'}/{repo}"
+
+    # Mark the converted checkpoint as shipped. In --skip-convert mode we didn't locate it above, so
+    # find it now (best-effort — the upload already succeeded, the marker must not change the exit code).
+    if checkpoint is None:
+        try:
+            checkpoint = find_final_checkpoint(output, skip_uploaded=False)
+        except Exception:  # noqa: BLE001
+            checkpoint = None
+    if checkpoint is not None:
+        write_success_marker(checkpoint, destination)
     return 0
 
 

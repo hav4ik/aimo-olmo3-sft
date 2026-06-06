@@ -55,7 +55,7 @@ BAKED_CODE_ROOT = Path(os.environ.get("FIELDS_CODE_ROOT", "/app/code"))
 
 # The deterministic identity train.py pins so it can locate the trained checkpoint afterwards.
 RUN_USER = "fields"  # -> save_folder = {OLMO_SFT_SAVE_ROOT}/checkpoints/{RUN_USER}/olmo-sft/{run_name}
-BAKED_HF_HOME = "/data/training/hf_cache"  # base-image default; relocated under --workdir at runtime
+BAKED_HF_HOME = "/tmp/olmo-sft/hf_cache"  # baked default (under /tmp, the always-bound dir); relocated under --workdir at runtime
 DEFAULT_DATASET_REPO = "chankhavu/smolmo-proofs-cot-sft"
 DEFAULT_DATASET_SUBDIR = "olmocore"
 DEFAULT_CODE_REPO = "https://github.com/hav4ik/aimo-olmo3-sft"
@@ -113,10 +113,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--experiment", default="olmo_7b_bf16", choices=sorted(RECIPES),
                    help="Recipe to run: olmo_<size>_<precision>.")
 
-    # The two roots the user asked for.
-    p.add_argument("--workdir", default=os.environ.get("FIELDS_WORKDIR", "/tmp/fields-olmo-sft"),
+    # The two roots the user asked for. Default UNDER /tmp — the dir the cluster always binds (e.g.
+    # `singularity run --containall --bind <host>:/tmp …`), so writes land on a real volume even when
+    # nothing else is bound. Override with --workdir/--output (or FIELDS_WORKDIR/FIELDS_OUTPUT).
+    p.add_argument("--workdir", default=os.environ.get("FIELDS_WORKDIR", "/tmp/olmo-sft/work"),
                    help="Scratch root: base model, tokenized dataset and code are downloaded here.")
-    p.add_argument("--output", default=os.environ.get("FIELDS_OUTPUT", "/data/training/output"),
+    p.add_argument("--output", default=os.environ.get("FIELDS_OUTPUT", "/tmp/olmo-sft/output"),
                    help="Deliverable root: logs + training checkpoints (upload.py converts + ships from here).")
 
     # Fields-standard paths (optional — override the corresponding download when a local path is given).
@@ -187,6 +189,13 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--relay-space", "--relay_space", dest="relay_space",
                    default=os.environ.get("RELAY_SPACE", "chankhavu/remote-shell"),
                    help="HF Space hosting the relay client (daemon/client.py).")
+
+    # Auto-upload: after training finishes, convert + ship the final checkpoint via upload.py (node 0 only).
+    p.add_argument("--upload", dest="upload", action="store_true",
+                   default=os.environ.get("FIELDS_UPLOAD", "1").lower() not in ("0", "false", "no", ""),
+                   help="After training finishes, convert + upload the final checkpoint via upload.py. Default on.")
+    p.add_argument("--no-upload", dest="upload", action="store_false",
+                   help="Do not auto-upload; leave the distcp for a manual python /app/upload.py.")
 
     # Sources (override the defaults if you host the artifacts elsewhere).
     p.add_argument("--dataset_repo", default=DEFAULT_DATASET_REPO, help="HF dataset repo to download when --dataset_path is unset.")
@@ -320,6 +329,19 @@ TRAIN_LAUNCH_MARKER = "[olmocore] run:"  # printed right before torchrun => hand
 def is_node_zero() -> bool:
     """Only node 0 logs to W&B (matches olmo-core, which logs from global rank 0 = node-0's worker)."""
     return os.environ.get("NODE_RANK", os.environ.get("GLOBAL_RANK", "0")) == "0"
+
+
+def run_upload(output: Path, seq_len: int) -> int:
+    """Convert + upload the final checkpoint by invoking the sibling upload.py (it finds the latest
+    complete distcp under --output, converts to HF safetensors, and ships it). Returns its exit code.
+    upload.py self-loads HF_TOKEN from the baked SECRETS.json, so the inherited env is enough."""
+    upload_py = Path(__file__).resolve().parent / "upload.py"
+    if not upload_py.is_file():
+        log.error("upload.py not found at %s — skipping auto-upload", upload_py)
+        return 1
+    cmd = [sys.executable, str(upload_py), "--output", str(output), "--seq-len", str(seq_len)]
+    log.info("auto-upload: %s", " ".join(cmd))
+    return subprocess.run(cmd, env=os.environ.copy()).returncode
 
 
 def wandb_run_id(name: str) -> str:
@@ -471,8 +493,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     log.info("workdir=%s  output=%s  logdir=%s", workdir, output, logdir)
 
     # Keep the HF cache under --workdir so it lands in the writable (bound) area. The baked default
-    # /data/training/hf_cache can be a read-only, non-bound path under Singularity if --workdir points
-    # elsewhere. Only override the baked default; honor an explicitly-different HF_HOME.
+    # (BAKED_HF_HOME, under /tmp) is bound on the cluster, but if --workdir points elsewhere we want the
+    # cache to follow it. Only override the baked default; honor an explicitly-different HF_HOME.
     if os.environ.get("HF_HOME", BAKED_HF_HOME) in (BAKED_HF_HOME, ""):
         os.environ["HF_HOME"] = str(workdir / "hf_cache")
         log.info("HF_HOME -> %s (under workdir)", os.environ["HF_HOME"])
@@ -525,14 +547,28 @@ def main(argv: Optional[list[str]] = None) -> int:
         raise RuntimeError(f"run.sh failed (exit {rc}) — see {logdir / 'run.log'}")
     log.info("training finished in %.1f min", (time.monotonic() - t0) / 60.0)
 
-    # Conversion + upload is upload.py's job: it finds the final distcp under --output, converts to
-    # <output>/model (HF safetensors), and ships it. Manifest so the result is self-describing.
+    # Manifest so the result is self-describing — and upload.py reads experiment= from it for the repo name.
     (output / "MANIFEST.txt").write_text(
         f"experiment={args.experiment}\nmodel_size={recipe.model_size}\nprecision={recipe.precision}\n"
         f"seq_len={seq_len}\ncheckpoints={save_root}\n"
         f"next=python /app/upload.py --output {output}\n"
         f"elapsed_min={(time.monotonic() - t0) / 60.0:.1f}\n")
-    log.info("DONE in %.1f min | distcp under %s | next: python /app/upload.py --output %s",
+
+    # Auto convert + upload the final checkpoint. Node 0 only (so multi-node runs don't race the same
+    # upload); other nodes stop here. An upload failure is surfaced as the exit code, but the distcp is
+    # intact on disk and the manifest's `next=` line lets you re-run upload.py by hand.
+    if args.upload and is_node_zero():
+        up_rc = run_upload(output, seq_len)
+        if up_rc != 0:
+            log.error("auto-upload FAILED (exit %d) — checkpoints intact; re-run by hand: "
+                      "python /app/upload.py --output %s", up_rc, output)
+            return up_rc
+        log.info("DONE in %.1f min | uploaded | distcp under %s", (time.monotonic() - t0) / 60.0, save_root)
+        return 0
+    if args.upload:
+        log.info("node %s: skipping upload (node 0 ships the model)",
+                 os.environ.get("NODE_RANK", os.environ.get("GLOBAL_RANK", "0")))
+    log.info("DONE in %.1f min | distcp under %s | upload: python /app/upload.py --output %s",
              (time.monotonic() - t0) / 60.0, save_root, output)
     return 0
 
