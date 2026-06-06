@@ -119,8 +119,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     # The one knob that picks the whole recipe.
-    p.add_argument("--experiment", default="olmo_7b_bf16", choices=sorted(RECIPES),
-                   help="Recipe to run: olmo_<size>_<precision>.")
+    p.add_argument("--experiment", default="olmo_7b_fp8", choices=sorted(RECIPES),
+                   help="Recipe to run: olmo_<size>_<precision>. Default olmo_7b_fp8 (the production submission).")
 
     # The two roots the user asked for. Default UNDER /tmp — the dir the cluster always binds (e.g.
     # `singularity run --containall --bind <host>:/tmp …`), so writes land on a real volume even when
@@ -185,7 +185,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--save-interval", "--save_interval", dest="save_interval", type=int, default=1000,
                    help="PERSISTENT checkpoint every N steps (kept = --keep-last, so disk stays bounded). Default 1000.")
     p.add_argument("--ephemeral-interval", "--ephemeral_interval", dest="ephemeral_interval", type=int,
-                   default=500, help="Ephemeral (rotating, only-latest-kept) resume checkpoint every N steps. Default 500.")
+                   default=250, help="Ephemeral (rotating, only-latest-kept) resume checkpoint every N steps. Default 250.")
     p.add_argument("--keep-last", "--keep_last", dest="keep_last", type=int, default=2,
                    help="Cap on PERSISTENT checkpoints kept (oldest pruned as new ones land; 0 = keep all). Default 2.")
 
