@@ -27,6 +27,32 @@ COPY experiments.sh entrypoint.sh /app/code/
 # official Cloudflare tunnels). Into the conda base so `python daemon/client.py` resolves it.
 RUN pip install --no-cache-dir "gradio_client>=1.3"
 
+# Ship a REAL, self-contained nvcc first on PATH so the container never resolves a HOST nvcc. On the
+# NII cluster a host nvcc on a noexec mount got picked up via PATH and raised an uncaught
+# PermissionError during the first torch.compile, killing every rank (torch tolerates a *missing* nvcc
+# but not a non-executable one). We install the matched CUDA-13.0 compiler trio (nvcc + nvvm/cicc +
+# crt) as pip wheels — the same channel as our cu13 runtime — and expose nvcc via a stable wrapper at
+# /opt/fields/bin that execs the real binary by ABSOLUTE path. (A symlink/dir-symlink breaks nvcc's
+# include-root detection — it keys off argv[0]; the exec-absolute wrapper preserves it.) Versions are
+# pinned EQUAL so cicc's emitted PTX matches the sibling ptxas (a skew makes real compiles fail).
+RUN pip install --no-cache-dir \
+        nvidia-cuda-nvcc==13.0.88 nvidia-nvvm==13.0.88 nvidia-cuda-crt==13.0.88 && \
+    mkdir -p /opt/fields/bin && \
+    REAL="$(find /opt/conda -name nvcc -path '*cu13*' -type f | head -1)" && \
+    printf '#!/bin/sh\nexec %s "$@"\n' "$REAL" > /opt/fields/bin/nvcc && \
+    chmod 0755 /opt/fields/bin/nvcc && \
+    /opt/fields/bin/nvcc --version           # build-time smoke test: fail the build if nvcc is broken
+
+# A: prefer ALL our baked-in binaries over anything a host bind could inject — populated in-image dirs
+# FIRST, the empty host-fillable dirs (/usr/local/{nvidia,cuda}/bin, /root/.cargo/bin) LAST. Generalizes
+# the nvcc fix to the whole toolchain (gcc/as/ld/python/pip/torchrun/...). The empty dirs stay on PATH
+# (harmless — --nv puts nvidia-smi in /usr/bin) but can no longer SHADOW an in-image binary.
+ENV PATH=/opt/fields/bin:/opt/conda/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/root/.cargo/bin
+# C: pin the highest-impact compilers to ABSOLUTE in-image paths so a shadowed gcc/g++ can't hijack
+# inductor's C++ wrapper compile or our nvcc's host-compile step (holds even under a PATH override).
+ENV CC=/usr/bin/gcc CXX=/usr/bin/g++
+ENV NVCC_PREPEND_FLAGS="-ccbin /usr/bin/gcc"
+
 # Bake credentials IF fields/SECRETS.json is supplied (else only the .example template, which is
 # ignored at runtime). The glob always matches the .example, so the build never fails on a missing
 # SECRETS.json. secrets_loader reads /app/SECRETS.json only; /app/SECRETS.example.json is inert.

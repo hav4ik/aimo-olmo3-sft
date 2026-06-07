@@ -1,0 +1,15 @@
+# Keep the PUBLIC docker image clean: never let real credentials enter the build context.
+# The Dockerfile's `COPY fields/SECRETS*.json /app/` then matches ONLY SECRETS.example.json (the inert
+# placeholder), so the docker image is clean even if someone forgets the move-aside-during-build step.
+# NOTE: the .sif is built by Singularity/Apptainer, which does NOT read this file — it still bakes the
+# real fields/SECRETS.json via the .def %files section (that's intended; the .sif is never pushed public).
+SECRETS.json
+**/SECRETS.json
+*presigned*
+
+# Build-context trimming — none of the below are COPY'd into the image; excluding them just speeds builds.
+*.sif
+fields/NII_debug/
+output/
+**/__pycache__/
+.git/

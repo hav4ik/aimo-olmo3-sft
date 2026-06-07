@@ -14,7 +14,7 @@ set -euo pipefail
 
 OUT="${1:-olmo3-fields_cu130.sif}"
 TAG="${2:-chankhavu/olmo3-fields:cu130}"
-DEF="fields/olmo3-fields.def"
+DEF="${3:-fields/olmo3-fields.def}"   # pass a specific .def as $3 (its `From:` selects the docker image)
 SB="$(mktemp -d /tmp/fields_sb.XXXX)"
 SQUASH="$(mktemp -u /tmp/rootfs.XXXX.squashfs)"
 

@@ -618,6 +618,19 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     log.info("writes -> %s (per-node scratch %s; hf_cache + wandb shared)", workdir, nodedir)
 
+    # Prefer our baked-in binaries over anything a host bind or PATH override could inject. Pin the
+    # in-image dirs to the FRONT of PATH (canonical order), then append whatever else the launch env put
+    # on PATH (callers can still ADD tools, just not SHADOW ours). Generalizes the nvcc fix to the whole
+    # toolchain (gcc/as/ld/python/pip/torchrun/nvcc/...) and survives SINGULARITYENV_PATH / --env PATH=
+    # overrides, which REPLACE the baked PATH wholesale (the baked reorder alone can't). PATH only —
+    # MASTER_ADDR/NCCL_*/etc. are untouched, so multi-node rendezvous + caller env vars still work.
+    if os.path.isdir("/opt/fields/bin"):   # i.e. we're inside the Fields image
+        _canon = [d for d in ("/opt/fields/bin", "/opt/conda/bin", "/root/.local/bin", "/usr/local/sbin",
+                              "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin") if os.path.isdir(d)]
+        _rest = [d for d in os.environ.get("PATH", "").split(":") if d and d not in _canon]
+        os.environ["PATH"] = ":".join(_canon + _rest)
+        log.info("PATH pinned (in-image dirs first): %s", os.environ["PATH"])
+
     # Preflight gate: only start the (multi-day) run if the environment is sound. HF credentials are
     # ALWAYS required — the base model + dataset are downloaded from HF and the result is uploaded there —
     # so a missing/invalid HF token is a hard FAIL. Bypass the whole gate with --no-smoke-test.

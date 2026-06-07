@@ -28,8 +28,8 @@ case "$DATASET_SRC" in
     *)         DATASET_PATH="$DATASET_SRC"; DATA_FILES="$DATASET_FILE" ;; # HF repo (or local dir) + the parquet inside it
 esac
 
-CC="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1)"
-case "$CC" in 9.*) DEFATTN=flash_attention_3 ;; *) DEFATTN=flex_attention ;; esac
+GPU_CC="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1)"   # NOT 'CC' — reserved C-compiler env var (Triton/inductor read it); see olmocore/run.sh
+case "$GPU_CC" in 9.*) DEFATTN=flash_attention_3 ;; *) DEFATTN=flex_attention ;; esac
 ATTN="${ATTN_IMPL:-$DEFATTN}"
 # Sequence parallelism for long context (e.g. 65536): CONTEXT_PARALLEL_SIZE>1 (a divisor of the total
 # GPUs) splits each sequence across that many ranks so the activations fit. SP needs flash attention
@@ -83,5 +83,5 @@ else
     LAUNCH=(--num_processes="$NPROC")
 fi
 unset RANK WORLD_SIZE GLOBAL_RANK LOCAL_RANK 2>/dev/null || true
-echo "[axolotl] $PRECISION | ${NNODES}x${NPROC} GPU cc=$CC | attn=$ATTN | node ${NODE_RANK}/${NNODES} | config=$(basename "$CONFIG") | data=$DATASET_PATH${DATA_FILES:+ ($DATA_FILES)} [pretokenized]"
+echo "[axolotl] $PRECISION | ${NNODES}x${NPROC} GPU cc=$GPU_CC | attn=$ATTN | node ${NODE_RANK}/${NNODES} | config=$(basename "$CONFIG") | data=$DATASET_PATH${DATA_FILES:+ ($DATA_FILES)} [pretokenized]"
 exec accelerate launch "${LAUNCH[@]}" -m axolotl.cli.train "$CFG" "${OVERRIDES[@]}"

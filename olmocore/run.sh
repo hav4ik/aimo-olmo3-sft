@@ -113,27 +113,30 @@ fi
 [ "${STAGE:-train}" = "convert" ] && { echo "[olmocore] STAGE=convert: checkpoint ready, exiting (no training)."; exit 0; }
 
 PRECISION="${PRECISION:-bf16}"
-CC="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1)"
+# GPU compute capability for arch gating below. NB: do NOT name this 'CC' — that's the reserved
+# C-compiler env var (Triton's runtime/build.py and inductor read $CC as the compiler); if 'CC' is
+# exported, a value like "9.0" leaks in and the build tries to exec a compiler named "9.0".
+GPU_CC="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1)"
 # FP8 scaling is arch-dependent (torch._scaled_mm via cuBLASLt; verified by tools/fp8_probe.py):
 #   - sm_90 (Hopper) / sm_100 (DC Blackwell): ROWWISE works (accurate; per-row scale, DeepSeek recipe).
 #   - sm_120 (RTX PRO 6000 workstation Blackwell): rowwise -> CUBLAS_STATUS_NOT_SUPPORTED, but
 #     TENSORWISE works. Lower accuracy (one scale/tensor) — fine for a throughput A/B, NOT a shipped
 #     model (do production FP8 on H200 with rowwise). Pick the default scaling by arch; explicit wins.
 if [ "$PRECISION" = "fp8" ]; then
-    case "$CC" in
+    case "$GPU_CC" in
         9.*|10.*) export OLMO_FP8="${OLMO_FP8:-rowwise}" ;;
         12.*)     export OLMO_FP8="${OLMO_FP8:-tensorwise}"
                   [ "$OLMO_FP8" = "rowwise" ] && { echo "ERROR: OLMO_FP8=rowwise unsupported on sm_120 (cuBLAS NOT_SUPPORTED); use tensorwise."; exit 2; }
                   echo "[olmocore] FP8 sm_120: tensorwise scaling (lower-accuracy, comparison-only; ship FP8 on H200/rowwise)" ;;
         *)        if [ -z "${OLMO_FORCE_FP8:-}" ]; then
-                      echo "ERROR: PRECISION=fp8 on unrecognized GPU (cc $CC). FP8 verified on sm_90/sm_100 (rowwise)"
+                      echo "ERROR: PRECISION=fp8 on unrecognized GPU (cc $GPU_CC). FP8 verified on sm_90/sm_100 (rowwise)"
                       echo "       and sm_120 (tensorwise). Use bf16, or set OLMO_FP8=<tensorwise|rowwise> + OLMO_FORCE_FP8=1."
                       exit 2
                   fi
                   export OLMO_FP8="${OLMO_FP8:-tensorwise}" ;;
     esac
 fi
-case "$CC" in 9.*) DEFATTN=flash_3 ;; *) DEFATTN=flash_2 ;; esac
+case "$GPU_CC" in 9.*) DEFATTN=flash_3 ;; *) DEFATTN=flash_2 ;; esac
 # Ring context parallelism (our default, auto-engaged once seq_len exceeds the ~16384-tok/rank cap) is
 # implemented ONLY on the FA2 backend — FlashAttention3 raises "doesn't support ring context
 # parallelism". So when CP will engage with ring, force FA2 even on sm_90/H200 (FA3's Hopper speedup is
@@ -247,7 +250,7 @@ fi
 # torchrun assigns the children's ranks; drop inherited process-level vars so they can't shadow it.
 unset RANK WORLD_SIZE GLOBAL_RANK LOCAL_RANK 2>/dev/null || true
 
-echo "[olmocore] $PRECISION | ${NNODES}x${NPROC} GPU cc=$CC | attn=$OLMO_ATTN_BACKEND | cp=${OLMO_CP_STYLE:-ring} | ac=${OLMO_AC_BUDGET:-selected_ffn} | fp8=${OLMO_FP8:-off}${OLMO_FP8_FSDP_ALLGATHER:+/ag} | optim=$OLMO_OPTIM | ckpt=${OLMO_SAVE_INTERVAL:-1000}/${OLMO_EPHEMERAL_INTERVAL:-500}/keep${OLMO_KEEP_LAST_CKPTS} | node ${NODE_RANK}/${NNODES} | $DUR_VAL $DUR_UNIT"
+echo "[olmocore] $PRECISION | ${NNODES}x${NPROC} GPU cc=$GPU_CC | attn=$OLMO_ATTN_BACKEND | cp=${OLMO_CP_STYLE:-ring} | ac=${OLMO_AC_BUDGET:-selected_ffn} | fp8=${OLMO_FP8:-off}${OLMO_FP8_FSDP_ALLGATHER:+/ag} | optim=$OLMO_OPTIM | ckpt=${OLMO_SAVE_INTERVAL:-1000}/${OLMO_EPHEMERAL_INTERVAL:-500}/keep${OLMO_KEEP_LAST_CKPTS} | node ${NODE_RANK}/${NNODES} | $DUR_VAL $DUR_UNIT"
 # Size-specific SFT script (local copy of AI2's, beaker-stubbed). Resolved per MODEL_SIZE via the table
 # above (DEF_SFT): 7b/32b -> Olmo-3-{7B,32B}-SFT-local.py (olmo3 long-context); 1b -> Olmo-2-1B-SFT-local.py
 # (Olmo-2 1B local test path). Each size's MODEL_ARCH/HF_MODEL is set in the same table, so they stay in sync.

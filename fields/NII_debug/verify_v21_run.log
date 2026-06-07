@@ -1,0 +1,154 @@
+############################################################################
+# v2.1 (REAL nvcc) verification: full 1B run with a NON-EXECUTABLE nvcc bound
+# at the NII vector /usr/local/cuda/bin/nvcc + caches forced COLD.
+# Expect: passes the dry-run (where run_01 crashed) and reaches training steps.
+############################################################################
+2026-06-07 07:10:15,187 [INFO] fields.train: Fields Olmo-3 SFT | experiment=olmo_1b_bf16 size=1b precision=bf16 seq_len=8192
+2026-06-07 07:10:15,193 [INFO] fields.train: workdir=/tmp/olmo-sft/work  output=/tmp/olmo-sft/output  logdir=/tmp/olmo-sft/output/logs
+2026-06-07 07:10:15,195 [INFO] fields.train: HF_HOME -> /tmp/olmo-sft/work/hf_cache (under workdir)
+2026-06-07 07:10:15,195 [INFO] fields.train: writes -> /tmp/olmo-sft/work (per-node scratch /tmp/olmo-sft/work/node/c2efd2aecf74; hf_cache + wandb shared)
+2026-06-07 07:10:15,195 [INFO] fields.train: preflight: /opt/conda/bin/python /app/smoke_test.py --workdir /tmp/olmo-sft/work --output /tmp/olmo-sft/output --require-hf
+Skipping import of cpp extensions due to incompatible torch version 2.10.0+cu130 for torchao version 0.15.0             Please see https://github.com/pytorch/ao/issues/2919 for more info
+==============================================================================
+Fields container smoke test
+  workdir=/tmp/olmo-sft/work  output=/tmp/olmo-sft/output  OLMo-core=/workspace/OLMo-core
+==============================================================================
+
+Checks:
+  [✓] python                           PASS python 3.12.13
+  [✓] nvidia-smi (GPUs visible)        PASS 2 GPU(s): NVIDIA GeForce RTX 3090, 24576 MiB, 8.6
+  [✓] torch CUDA                       PASS torch 2.10.0+cu130 | 2 GPU | sm_86  (expected sm_90+ on H200)
+  [✓] FP8 (_scaled_mm)                 PASS torch._scaled_mm present; FP8-capable arch sm_86
+  [✓] hf auth whoami                   PASS hf user: [32m✓ Logged in[0m
+  [✓] wandb login --verify             PASS wandb: Currently logged in as: hav4ik to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+  [✓] core files exist                 PASS 8 core files present
+  [✓] workdir/output writable          PASS workdir ok; output ok
+  [✓] free disk                        PASS min free 1053 GB (need ~150 GB for 7B)
+  [✓] libnvrtc linker fix              PASS libnvrtc on ld path: 1 entrie(s)
+  [✓] import olmo_core                 PASS olmo_core ok (nn.transformer imports)
+  [✓] import flash_attn                PASS flash_attn 2.8.1
+  [✓] import transformer_engine        PASS transformer_engine 2.9.0
+  [✓] import ring_flash_attn           PASS ring_flash_attn imports (transformers shim ok)
+  [✓] convert_to_hf runs               PASS convert_to_hf --help imports cleanly
+  [✓] torchrun present                 PASS torchrun on PATH
+  [✓] HF hub reachable                 PASS reached hub; base model siblings=16
+
+==============================================================================
+RESULT: 17 checks | 0 FAIL | 0 WARN | 17 PASS
+==============================================================================
+All green — container ready to train.
+2026-06-07 07:10:34,516 [INFO] fields.train: batching | global=16384 tok | seq_len=8192 | cp_degree~1 | rank_microbatch=auto (1 seq/rank, ~8192 tok/GPU) | ac_budget=0.8
+2026-06-07 07:10:34,516 [INFO] fields.train: using baked code at /app/code
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+wandb: Currently logged in as: hav4ik to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.27.0
+wandb: Run data is saved locally in /tmp/olmo-sft/output/wandb/wandb/run-20260607_071035-olmo3-1b-sft-bf16-nvccfix-verify
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run olmo3-1b-sft-bf16-nvccfix-verify
+wandb: ⭐️ View project at https://wandb.ai/hav4ik/olmo3-7b-sft
+wandb: 🚀 View run at https://wandb.ai/hav4ik/olmo3-7b-sft/runs/olmo3-1b-sft-bf16-nvccfix-verify
+2026-06-07 07:10:36,618 [INFO] fields.train: W&B run open (id=olmo3-1b-sft-bf16-nvccfix-verify, project=olmo3-7b-sft) — the training worker resumes this same run
+2026-06-07 07:10:36,670 [INFO] fields.train: upload watcher started (poll every 300s, 90min/upload cap, CPU-only, ships each new checkpoint)
+2026-06-07 07:10:36,674 [INFO] fields.train: exec: bash /app/code/olmocore/run.sh
+[olmocore] run: olmo3-1b-sft-bf16-nvccfix-verify
+wandb: updating run metadata; uploading summary
+wandb: uploading output.log
+wandb: 
+wandb: Run summary:
+wandb:     setup/phase training
+wandb: setup/total_sec 0
+wandb: 
+wandb: 🚀 View run olmo3-1b-sft-bf16-nvccfix-verify at: https://wandb.ai/hav4ik/olmo3-7b-sft/runs/olmo3-1b-sft-bf16-nvccfix-verify
+wandb: ⭐️ View project at: https://wandb.ai/hav4ik/olmo3-7b-sft
+wandb: Synced 5 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: /tmp/olmo-sft/output/wandb/wandb/run-20260607_071035-olmo3-1b-sft-bf16-nvccfix-verify/logs
+[olmocore] bf16 | 1x2 GPU cc=8.6 | attn=torch | cp=ring | ac=0.8 | fp8=off | optim=fused_adamw | ckpt=100/100/keep2 | node 0/1 | 5 steps
+W0607 07:10:38.169000 242 site-packages/torch/distributed/run.py:852] 
+W0607 07:10:38.169000 242 site-packages/torch/distributed/run.py:852] *****************************************
+W0607 07:10:38.169000 242 site-packages/torch/distributed/run.py:852] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+W0607 07:10:38.169000 242 site-packages/torch/distributed/run.py:852] *****************************************
+Skipping import of cpp extensions due to incompatible torch version 2.10.0+cu130 for torchao version 0.15.0             Please see https://github.com/pytorch/ao/issues/2919 for more info
+Skipping import of cpp extensions due to incompatible torch version 2.10.0+cu130 for torchao version 0.15.0             Please see https://github.com/pytorch/ao/issues/2919 for more info
+Setting env var 'TORCH_NCCL_AVOID_RECORD_STREAMS' to '1'
+Setting env var 'TORCH_DIST_INIT_BARRIER' to '1'
+Setting env var 'TORCH_NCCL_AVOID_RECORD_STREAMS' to '1'
+Setting env var 'TORCH_DIST_INIT_BARRIER' to '1'
+Initializing process group with timeout=datetime.timedelta(seconds=900)...
+Initializing process group with timeout=datetime.timedelta(seconds=900)...
+[Gloo] Rank 1 is connected to 1 peer ranks. Expected number of connected peer ranks is : 1
+[Gloo] Rank 0 is connected to 1 peer ranks. Expected number of connected peer ranks is : 1
+[W607 07:10:45.064646248 ProcessGroupNCCL.cpp:929] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+[W607 07:10:45.064646308 ProcessGroupNCCL.cpp:929] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+Global rank 1 = local rank 1 = file system local rank 1
+Global rank 0 = local rank 0 = file system local rank 0
+2026-06-07 07:10:45.481	c2efd2aecf74:1	olmo_core.utils:237	WARNING	Will skip setting env var 'OMP_NUM_THREADS' since it's already set to '8'
+2026-06-07 07:10:45.481	c2efd2aecf74:0	olmo_core.utils:237	WARNING	Will skip setting env var 'OMP_NUM_THREADS' since it's already set to '8'
+2026-06-07 07:10:45.481	c2efd2aecf74:0	olmo_core.utils:237	INFO	Setting env var 'TOKENIZERS_PARALLELISM' to 'false'
+2026-06-07 07:10:45.481	c2efd2aecf74:0	olmo_core.train:148	INFO	Using distributed backend cpu:gloo,cuda:nccl
+2026-06-07 07:10:45.481	c2efd2aecf74:1	__main__:604	WARNING	OLMO_OPTIM_DTYPE applies only to the skip_step optimizer; fused AdamW keeps fp32 state
+OLMoConfigurationError: 'ephemeral_save_interval' must be less than 'save_interval'
+Batch size config (before overrides):
+BatchSizeConfig(
+    global_batch_size_tokens=16384,
+    sequence_length=8192,
+    world_size=2,
+    gpu_type='h100',
+    rank_microbatch_size_tokens=8192,
+    rank_microbatch_size_sequences=1,
+    grad_accum_steps=1,
+    cp_degree=None
+)
+2026-06-07 07:10:45.483	c2efd2aecf74:0	__main__:604	WARNING	OLMO_OPTIM_DTYPE applies only to the skip_step optimizer; fused AdamW keeps fp32 state
+OLMoConfigurationError: 'ephemeral_save_interval' must be less than 'save_interval'
+[rank0]:[W607 07:10:45.538787636 ProcessGroupNCCL.cpp:1553] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
+E0607 07:10:46.709000 242 site-packages/torch/distributed/elastic/multiprocessing/api.py:984] failed (exitcode: 1) local_rank: 0 (pid: 280) of binary: /opt/conda/bin/python
+Traceback (most recent call last):
+  File "/opt/conda/bin/torchrun", line 33, in <module>
+    sys.exit(load_entry_point('torch==2.10.0+cu130', 'console_scripts', 'torchrun')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 362, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/site-packages/torch/distributed/run.py", line 991, in main
+    run(args)
+  File "/opt/conda/lib/python3.12/site-packages/torch/distributed/run.py", line 982, in run
+    elastic_launch(
+  File "/opt/conda/lib/python3.12/site-packages/torch/distributed/launcher/api.py", line 170, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/site-packages/torch/distributed/launcher/api.py", line 317, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+============================================================
+/app/code/olmocore/sft_scripts/Olmo-2-1B-SFT-local.py FAILED
+------------------------------------------------------------
+Failures:
+[1]:
+  time      : 2026-06-07_07:10:46
+  host      : c2efd2aecf74
+  rank      : 1 (local_rank: 1)
+  exitcode  : 1 (pid: 281)
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-06-07_07:10:46
+  host      : c2efd2aecf74
+  rank      : 0 (local_rank: 0)
+  exitcode  : 1 (pid: 280)
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+============================================================
+2026-06-07 07:10:47,041 [INFO] fields.train: upload watcher stopped
+2026-06-07 07:10:47,041 [INFO] fields.train: auto-upload (final): /opt/conda/bin/python /app/upload.py --output /tmp/olmo-sft/output --seq-len 8192 --final --retries 10 (CPU-only)
+2026-06-07 07:10:47,072 [INFO] fields.secrets: loaded secrets from /app/SECRETS.json (set: none new)
+2026-06-07 07:10:47,077 [INFO] fields.upload: nothing to upload yet: no step* checkpoint under /tmp/olmo-sft/output (did training save one?)
+Traceback (most recent call last):
+  File "/app/train.py", line 746, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/app/train.py", line 735, in main
+    raise RuntimeError(f"run.sh failed (exit {rc}) — see {logdir / 'run.log'}")
+RuntimeError: run.sh failed (exit 1) — see /tmp/olmo-sft/output/logs/run.log
+EXIT=1

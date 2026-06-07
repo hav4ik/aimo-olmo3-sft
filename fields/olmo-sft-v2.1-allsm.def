@@ -1,0 +1,45 @@
+# Singularity/Apptainer definition for the Fields Model submission image — v2.1 (allsm).
+#
+# v2.1 over v2: ships its OWN real nvcc (matched CUDA-13.0 pip wheels: nvcc + nvvm/cicc + crt) first on
+# PATH (/opt/fields/bin) so the container never resolves a HOST nvcc. On NII, a host nvcc on a noexec
+# mount was picked up via PATH and raised an uncaught PermissionError at the first torch.compile,
+# crashing every rank. See fields/Dockerfile + fields/NII_debug/NII_REPORT.md.
+#
+# Bootstraps from the LOCAL docker image (chankhavu/olmo3-sft-v2.1:cu130-allsm) and bakes the real
+# credentials (fields/SECRETS.json) into /app/SECRETS.json so the container needs no `-e` on the
+# NII/ABCI Singularity cluster. The docker image itself is pushed WITHOUT secrets; the secrets live
+# ONLY in this locally-built .sif — never push this .sif to a shared/public registry.
+#
+# Build (from repo root, so %files paths resolve):
+#   bash fields/build_sif.sh olmo-sft-v2.1-allsm.sif chankhavu/olmo3-sft-v2.1:cu130-allsm
+#   # build_sif.sh uses fields/olmo3-fields.def by default — pass this def explicitly, or:
+#   singularity build --fakeroot olmo-sft-v2.1-allsm.sif fields/olmo-sft-v2.1-allsm.def
+# NOTE: apptainer/SingularityCE 1.5.1 bundles mksquashfs 4.7.5, which crashes on this ~12GB rootfs
+# ("Bug in orderer"/SIGSEGV). build_sif.sh works around it via sandbox + system mksquashfs.
+#
+# Run (defaults write under /tmp — bind it to a real host volume; --nv for GPUs):
+#   singularity run --nv --containall \
+#     --bind /scratch/$USER/training:/tmp \
+#     olmo-sft-v2.1-allsm.sif --experiment olmo_7b_fp8 --max-tokens-per-rank 16384 --olmo-ac-budget 0.8
+
+Bootstrap: docker-daemon
+From: chankhavu/olmo3-sft-v2.1:cu130-allsm
+
+%files
+    # Bake real credentials into the .sif (HF_TOKEN + WANDB_API_KEY). secrets_loader reads
+    # /app/SECRETS.json; a same-named env var still wins at runtime.
+    fields/SECRETS.json /app/SECRETS.json
+
+%runscript
+    # Mirror the docker ENTRYPOINT explicitly so `singularity run <sif> <flags>` == train.py.
+    exec python /app/train.py "$@"
+
+%labels
+    org.fields.entrypoint /app/train.py
+    org.fields.base chankhavu/olmo3-sft-v2.1:cu130-allsm
+    org.fields.secrets baked
+
+%help
+    Fields Model SFT image v2.1 (Olmo-3). Entrypoint: python /app/train.py. Ships its own nvcc so it
+    never depends on the host's. Bind a host dir to /tmp (defaults write there) and pass train.py flags
+    after the .sif path. Convert + upload: singularity exec <sif> python /app/upload.py (auto after training).

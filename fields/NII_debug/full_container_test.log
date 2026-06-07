@@ -1,0 +1,1891 @@
+2026-06-07 02:16:15,571 [INFO] fields.train: Fields Olmo-3 SFT | experiment=olmo_1b_bf16 size=1b precision=bf16 seq_len=8192
+2026-06-07 02:16:15,571 [INFO] fields.train: workdir=/tmp/olmo-sft/work  output=/tmp/olmo-sft/output  logdir=/tmp/olmo-sft/output/logs
+2026-06-07 02:16:15,571 [INFO] fields.train: HF_HOME -> /tmp/olmo-sft/work/hf_cache (under workdir)
+2026-06-07 02:16:15,572 [INFO] fields.train: writes -> /tmp/olmo-sft/work (per-node scratch /tmp/olmo-sft/work/node/Iva; hf_cache + wandb shared)
+2026-06-07 02:16:15,572 [INFO] fields.train: PATH pinned (in-image dirs first): /opt/fields/bin:/opt/conda/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/root/.cargo/bin
+2026-06-07 02:16:15,572 [INFO] fields.train: preflight: /opt/conda/bin/python /app/smoke_test.py --workdir /tmp/olmo-sft/work --output /tmp/olmo-sft/output --require-hf
+Skipping import of cpp extensions due to incompatible torch version 2.10.0+cu130 for torchao version 0.15.0             Please see https://github.com/pytorch/ao/issues/2919 for more info
+==============================================================================
+Fields container smoke test
+  workdir=/tmp/olmo-sft/work  output=/tmp/olmo-sft/output  OLMo-core=/workspace/OLMo-core
+==============================================================================
+
+Checks:
+  [✓] python                           PASS python 3.12.13
+  [✓] nvidia-smi (GPUs visible)        PASS 2 GPU(s): NVIDIA GeForce RTX 3090, 24576 MiB, 8.6
+  [✓] torch CUDA                       PASS torch 2.10.0+cu130 | 2 GPU | sm_86  (expected sm_90+ on H200)
+  [✓] FP8 (_scaled_mm)                 PASS torch._scaled_mm present; FP8-capable arch sm_86
+  [✓] hf auth whoami                   PASS hf user: [32m✓ Logged in[0m
+  [✓] wandb login --verify             PASS wandb: Currently logged in as: hav4ik to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+  [✓] core files exist                 PASS 8 core files present
+  [✓] workdir/output writable          PASS workdir ok; output ok
+  [✓] free disk                        PASS min free 1050 GB (need ~150 GB for 7B)
+  [✓] libnvrtc linker fix              PASS libnvrtc on ld path: 1 entrie(s)
+  [✓] import olmo_core                 PASS olmo_core ok (nn.transformer imports)
+  [✓] import flash_attn                PASS flash_attn 2.8.1
+  [✓] import transformer_engine        PASS transformer_engine 2.9.0
+  [✓] import ring_flash_attn           PASS ring_flash_attn imports (transformers shim ok)
+  [✓] convert_to_hf runs               PASS convert_to_hf --help imports cleanly
+  [✓] torchrun present                 PASS torchrun on PATH
+  [✓] HF hub reachable                 PASS reached hub; base model siblings=16
+
+==============================================================================
+RESULT: 17 checks | 0 FAIL | 0 WARN | 17 PASS
+==============================================================================
+All green — container ready to train.
+2026-06-07 02:16:35,296 [INFO] fields.train: batching | global=16384 tok | seq_len=8192 | cp_degree~1 | rank_microbatch=auto (1 seq/rank, ~8192 tok/GPU) | ac_budget=0.8
+2026-06-07 02:16:35,296 [INFO] fields.train: using baked code at /app/code
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+wandb: Currently logged in as: hav4ik to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.27.0
+wandb: Run data is saved locally in /tmp/olmo-sft/output/wandb/wandb/run-20260607_021636-olmo3-1b-sft-bf16-fulltest
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Resuming run olmo3-1b-sft-bf16-fulltest
+wandb: ⭐️ View project at https://wandb.ai/hav4ik/olmo3-7b-sft
+wandb: 🚀 View run at https://wandb.ai/hav4ik/olmo3-7b-sft/runs/olmo3-1b-sft-bf16-fulltest
+2026-06-07 02:16:37,311 [INFO] fields.train: W&B run open (id=olmo3-1b-sft-bf16-fulltest, project=olmo3-7b-sft) — the training worker resumes this same run
+2026-06-07 02:16:37,346 [INFO] fields.train: upload watcher started (poll every 300s, 90min/upload cap, CPU-only, ships each new checkpoint)
+2026-06-07 02:16:37,346 [INFO] fields.train: exec: bash /app/code/olmocore/run.sh
+[olmocore] run: olmo3-1b-sft-bf16-fulltest
+wandb: updating run metadata
+wandb: uploading summary, console lines 0-3
+wandb: 
+wandb: Run summary:
+wandb:        checkpoint/load_duration_s 12.8878
+wandb:        checkpoint/save_duration_s 44.25995
+wandb:     gpu_memory/GPU active mem (%) 83.91023
+wandb:   gpu_memory/GPU active mem (GiB) 19.76986
+wandb:   gpu_memory/GPU reserved mem (%) 96.11133
+wandb: gpu_memory/GPU reserved mem (GiB) 22.64453
+wandb:                optim/LR (group 0) 0
+wandb:             optim/total grad norm 39.97501
+wandb:                       setup/phase training
+wandb:                   setup/total_sec 0
+wandb:                               +16 ...
+wandb: 
+wandb: 🚀 View run olmo3-1b-sft-bf16-fulltest at: https://wandb.ai/hav4ik/olmo3-7b-sft/runs/olmo3-1b-sft-bf16-fulltest
+wandb: ⭐️ View project at: https://wandb.ai/hav4ik/olmo3-7b-sft
+wandb: Synced 5 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: /tmp/olmo-sft/output/wandb/wandb/run-20260607_021636-olmo3-1b-sft-bf16-fulltest/logs
+[olmocore] bf16 | 1x2 GPU cc=8.6 | attn=torch | cp=ring | ac=0.8 | fp8=off | optim=fused_adamw | ckpt=1000/500/keep2 | node 0/1 | 10 steps
+W0607 02:16:38.418000 198 site-packages/torch/distributed/run.py:852] 
+W0607 02:16:38.418000 198 site-packages/torch/distributed/run.py:852] *****************************************
+W0607 02:16:38.418000 198 site-packages/torch/distributed/run.py:852] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+W0607 02:16:38.418000 198 site-packages/torch/distributed/run.py:852] *****************************************
+Skipping import of cpp extensions due to incompatible torch version 2.10.0+cu130 for torchao version 0.15.0             Please see https://github.com/pytorch/ao/issues/2919 for more info
+Skipping import of cpp extensions due to incompatible torch version 2.10.0+cu130 for torchao version 0.15.0             Please see https://github.com/pytorch/ao/issues/2919 for more info
+Setting env var 'TORCH_NCCL_AVOID_RECORD_STREAMS' to '1'
+Setting env var 'TORCH_DIST_INIT_BARRIER' to '1'
+Setting env var 'TORCH_NCCL_AVOID_RECORD_STREAMS' to '1'
+Setting env var 'TORCH_DIST_INIT_BARRIER' to '1'
+Initializing process group with timeout=datetime.timedelta(seconds=900)...
+Initializing process group with timeout=datetime.timedelta(seconds=900)...
+[Gloo] Rank [Gloo] Rank 1 is connected to 01 is connected to  peer ranks. 1Expected number of connected peer ranks is :  peer ranks. 1Expected number of connected peer ranks is : 1
+
+[W607 02:16:43.205595897 ProcessGroupNCCL.cpp:929] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+[W607 02:16:43.205598147 ProcessGroupNCCL.cpp:929] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+Global rank 0 = local rank 0 = file system local rank 0
+Global rank 1 = local rank 1 = file system local rank 1
+2026-06-07 02:16:43.621	Iva:1	olmo_core.utils:237	WARNING	Will skip setting env var 'OMP_NUM_THREADS' since it's already set to '8'
+2026-06-07 02:16:43.621	Iva:0	olmo_core.utils:237	WARNING	Will skip setting env var 'OMP_NUM_THREADS' since it's already set to '8'
+2026-06-07 02:16:43.622	Iva:0	olmo_core.utils:237	INFO	Setting env var 'TOKENIZERS_PARALLELISM' to 'false'
+2026-06-07 02:16:43.622	Iva:0	olmo_core.train:148	INFO	Using distributed backend cpu:gloo,cuda:nccl
+2026-06-07 02:16:43.622	Iva:1	__main__:604	WARNING	OLMO_OPTIM_DTYPE applies only to the skip_step optimizer; fused AdamW keeps fp32 state
+Batch size config (before overrides):
+BatchSizeConfig(
+    global_batch_size_tokens=16384,
+    sequence_length=8192,
+    world_size=2,
+    gpu_type='h100',
+    rank_microbatch_size_tokens=8192,
+    rank_microbatch_size_sequences=1,
+    grad_accum_steps=1,
+    cp_degree=None
+)
+2026-06-07 02:16:43.624	Iva:0	__main__:604	WARNING	OLMO_OPTIM_DTYPE applies only to the skip_step optimizer; fused AdamW keeps fp32 state
+SFTConfig(
+    run_name='olmo3-1b-sft-bf16-fulltest',
+    launch=None,
+    model=TransformerConfig(
+        d_model=2048,
+        vocab_size=100352,
+        n_layers=16,
+        block=TransformerBlockConfig(
+            sequence_mixer=AttentionConfig(
+                name='default',
+                n_heads=16,
+                n_kv_heads=None,
+                head_dim=None,
+                bias=False,
+                gate=None,
+                rope=RoPEConfig(name='default', theta=500000, full_precision=True, no_global_rope=False, scaling=None),
+                clip_qkv=None,
+                qk_norm=LayerNormConfig(name='rms', eps=1e-06, elementwise_affine=None, bias=False, full_precision=None, dtype='float32'),
+                dropout=None,
+                use_flash=None,
+                backend='torch',
+                dtype='float32',
+                sliding_window=None,
+                use_head_qk_norm=False
+            ),
+            layer_norm=LayerNormConfig(name='rms', eps=1e-06, elementwise_affine=None, bias=False, full_precision=None, dtype='float32'),
+            feed_forward=FeedForwardConfig(hidden_size=8192, name='default', bias=False, dtype='float32', activation='silu'),
+            feed_forward_moe=None,
+            name='reordered_norm',
+            dropout=None,
+            attention_residual_alpha=None,
+            feed_forward_residual_alpha=None
+        ),
+        lm_head=LMHeadConfig(
+            name='default',
+            layer_norm=LayerNormConfig(name='rms', eps=1e-06, elementwise_affine=None, bias=False, full_precision=None, dtype='float32'),
+            bias=False,
+            dtype='float32',
+            loss_implementation='fused_linear'
+        ),
+        embedding_norm=None,
+        name='default',
+        dtype='float32',
+        init_method='normal',
+        init_seed=0,
+        init_std=0.02,
+        embedding_init_std=None,
+        freeze_params=None,
+        block_pattern=None,
+        block_overrides=None,
+        embed_scale=None
+    ),
+    dataset=NumpyPackedFSLDatasetConfig(
+        tokenizer=TokenizerConfig(vocab_size=100278, eos_token_id=100257, pad_token_id=100277, bos_token_id=None, identifier='allenai/dolma2-tokenizer'),
+        paths=['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_*.npy'],
+        mix=None,
+        mix_base_dir=None,
+        expand_glob=True,
+        dtype=None,
+        metadata=None,
+        include_instance_metadata=True,
+        instance_filter_config=None,
+        source_permutation_seed=None,
+        work_dir='/tmp/olmo-sft/output/internal/_work',
+        ignore_fingerprint_mismatch=False,
+        sequence_length=8192,
+        generate_doc_lengths=False,
+        label_mask_paths=['/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_*.npy'],
+        long_doc_strategy='truncate',
+        source_group_size=1
+    ),
+    data_loader=NumpyDataLoaderConfig(
+        global_batch_size=16384,
+        seed=34521,
+        work_dir=None,
+        num_threads=None,
+        num_workers=4,
+        prefetch_factor=None,
+        target_device_type=None,
+        ignore_fingerprint_mismatch=False
+    ),
+    train_module=TransformerTrainModuleConfig(
+        rank_microbatch_size=8192,
+        max_sequence_length=8192,
+        optim=AdamWConfig(group_overrides=None, compile=False, fixed_fields=('initial_lr',), lr=1e-12, betas=(0.9, 0.95), eps=1e-08, weight_decay=0.0, foreach=None, fused=True),
+        max_grad_norm=1.0,
+        scheduler=LinearWithWarmup(
+            lr_field='lr',
+            initial_lr_field='initial_lr',
+            units='steps',
+            alpha_f=0.0,
+            t_max=None,
+            warmup=None,
+            warmup_steps=None,
+            warmup_fraction=0.03,
+            warmup_min_lr=0.0
+        ),
+        compile_model=True,
+        float8_config=None,
+        pp_config=None,
+        dp_config=TransformerDataParallelConfig(
+            name='hsdp',
+            param_dtype='bfloat16',
+            reduce_dtype='float32',
+            num_replicas=None,
+            shard_degree=2,
+            wrapping_strategy='full',
+            prefetch_factor=0
+        ),
+        tp_config=None,
+        cp_config=None,
+        ep_config=None,
+        ac_config=TransformerActivationCheckpointingConfig(mode='budget', block_interval=None, modules=None, activation_memory_budget=0.8),
+        z_loss_multiplier=None,
+        state_dict_save_opts=None,
+        state_dict_load_opts=None,
+        load_key_mapping=None,
+        autocast_precision=None,
+        label_ignore_index=-100
+    ),
+    trainer=TrainerConfig(
+        save_folder='/tmp/olmo-sft/output/internal/checkpoints/fields/olmo-sft/olmo3-1b-sft-bf16-fulltest',
+        work_dir=None,
+        load_path=None,
+        load_strategy='never',
+        load_optim_state=None,
+        load_trainer_state=None,
+        checkpointer=CheckpointerConfig(work_dir=None, save_overwrite=None, pre_download=False, save_thread_count=1, load_thread_count=32, throttle_uploads=True),
+        device=None,
+        save_overwrite=True,
+        max_duration=Duration(value=10, unit='steps'),
+        cancel_check_interval=10,
+        hard_stop=None,
+        metrics_collect_interval=10,
+        callbacks={
+            'gpu_monitor': GPUMemoryMonitorCallback(device_id=None, _num_alloc_retries=0),
+            'config_saver': ConfigSaverCallback(fname='config.json', save_data_paths=None, data_paths_fname=None, _config=None),
+            'garbage_collector': GarbageCollectorCallback(gc_interval=1000, enabled=True, _start_state=None),
+            'checkpointer': CheckpointerCallback(
+                save_interval=1000,
+                ephemeral_save_interval=500,
+                pre_train_checkpoint=None,
+                save_async=True,
+                remove='ephemeral_only',
+                ephemeral_cooldown=None,
+                fixed_steps=None,
+                enabled=True,
+                _latest_checkpoint_step=-1,
+                _latest_checkpoint_path='',
+                _checkpoints=[],
+                _ephemeral_checkpoints=[],
+                _checkpoints_to_remove=[]
+            ),
+            'checkpoint_retention': KeepLastNCheckpoints(keep_last=2, save_interval=1000, _persistent=[]),
+            'wandb': WandBCallback(
+                enabled=True,
+                name='olmo3-1b-sft-bf16-fulltest',
+                project='olmo3-7b-sft',
+                entity=None,
+                group=None,
+                tags=None,
+                notes=None,
+                config=None,
+                cancel_tags=['cancel', 'canceled', 'cancelled'],
+                cancel_check_interval=10,
+                _finalized=False
+            )
+        },
+        async_bookkeeping=None,
+        bookkeeping_soft_timeout=30,
+        no_checkpoints=False,
+        no_evals=False,
+        steps_to_skip=None
+    ),
+    init_seed=33333
+)
+SFTConfig(
+    run_name='olmo3-1b-sft-bf16-fulltest',
+    launch=None,
+    model=TransformerConfig(
+        d_model=2048,
+        vocab_size=100352,
+        n_layers=16,
+        block=TransformerBlockConfig(
+            sequence_mixer=AttentionConfig(
+                name='default',
+                n_heads=16,
+                n_kv_heads=None,
+                head_dim=None,
+                bias=False,
+                gate=None,
+                rope=RoPEConfig(name='default', theta=500000, full_precision=True, no_global_rope=False, scaling=None),
+                clip_qkv=None,
+                qk_norm=LayerNormConfig(name='rms', eps=1e-06, elementwise_affine=None, bias=False, full_precision=None, dtype='float32'),
+                dropout=None,
+                use_flash=None,
+                backend='torch',
+                dtype='float32',
+                sliding_window=None,
+                use_head_qk_norm=False
+            ),
+            layer_norm=LayerNormConfig(name='rms', eps=1e-06, elementwise_affine=None, bias=False, full_precision=None, dtype='float32'),
+            feed_forward=FeedForwardConfig(hidden_size=8192, name='default', bias=False, dtype='float32', activation='silu'),
+            feed_forward_moe=None,
+            name='reordered_norm',
+            dropout=None,
+            attention_residual_alpha=None,
+            feed_forward_residual_alpha=None
+        ),
+        lm_head=LMHeadConfig(
+            name='default',
+            layer_norm=LayerNormConfig(name='rms', eps=1e-06, elementwise_affine=None, bias=False, full_precision=None, dtype='float32'),
+            bias=False,
+            dtype='float32',
+            loss_implementation='fused_linear'
+        ),
+        embedding_norm=None,
+        name='default',
+        dtype='float32',
+        init_method='normal',
+        init_seed=0,
+        init_std=0.02,
+        embedding_init_std=None,
+        freeze_params=None,
+        block_pattern=None,
+        block_overrides=None,
+        embed_scale=None
+    ),
+    dataset=NumpyPackedFSLDatasetConfig(
+        tokenizer=TokenizerConfig(vocab_size=100278, eos_token_id=100257, pad_token_id=100277, bos_token_id=None, identifier='allenai/dolma2-tokenizer'),
+        paths=['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_*.npy'],
+        mix=None,
+        mix_base_dir=None,
+        expand_glob=True,
+        dtype=None,
+        metadata=None,
+        include_instance_metadata=True,
+        instance_filter_config=None,
+        source_permutation_seed=None,
+        work_dir='/tmp/olmo-sft/output/internal/_work',
+        ignore_fingerprint_mismatch=False,
+        sequence_length=8192,
+        generate_doc_lengths=False,
+        label_mask_paths=['/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_*.npy'],
+        long_doc_strategy='truncate',
+        source_group_size=1
+    ),
+    data_loader=NumpyDataLoaderConfig(
+        global_batch_size=16384,
+        seed=34521,
+        work_dir=None,
+        num_threads=None,
+        num_workers=4,
+        prefetch_factor=None,
+        target_device_type=None,
+        ignore_fingerprint_mismatch=False
+    ),
+    train_module=TransformerTrainModuleConfig(
+        rank_microbatch_size=8192,
+        max_sequence_length=8192,
+        optim=AdamWConfig(group_overrides=None, compile=False, fixed_fields=('initial_lr',), lr=1e-12, betas=(0.9, 0.95), eps=1e-08, weight_decay=0.0, foreach=None, fused=True),
+        max_grad_norm=1.0,
+        scheduler=LinearWithWarmup(
+            lr_field='lr',
+            initial_lr_field='initial_lr',
+            units='steps',
+            alpha_f=0.0,
+            t_max=None,
+            warmup=None,
+            warmup_steps=None,
+            warmup_fraction=0.03,
+            warmup_min_lr=0.0
+        ),
+        compile_model=True,
+        float8_config=None,
+        pp_config=None,
+        dp_config=TransformerDataParallelConfig(
+            name='hsdp',
+            param_dtype='bfloat16',
+            reduce_dtype='float32',
+            num_replicas=None,
+            shard_degree=2,
+            wrapping_strategy='full',
+            prefetch_factor=0
+        ),
+        tp_config=None,
+        cp_config=None,
+        ep_config=None,
+        ac_config=TransformerActivationCheckpointingConfig(mode='budget', block_interval=None, modules=None, activation_memory_budget=0.8),
+        z_loss_multiplier=None,
+        state_dict_save_opts=None,
+        state_dict_load_opts=None,
+        load_key_mapping=None,
+        autocast_precision=None,
+        label_ignore_index=-100
+    ),
+    trainer=TrainerConfig(
+        save_folder='/tmp/olmo-sft/output/internal/checkpoints/fields/olmo-sft/olmo3-1b-sft-bf16-fulltest',
+        work_dir=None,
+        load_path=None,
+        load_strategy='never',
+        load_optim_state=None,
+        load_trainer_state=None,
+        checkpointer=CheckpointerConfig(work_dir=None, save_overwrite=None, pre_download=False, save_thread_count=1, load_thread_count=32, throttle_uploads=True),
+        device=None,
+        save_overwrite=True,
+        max_duration=Duration(value=10, unit='steps'),
+        cancel_check_interval=10,
+        hard_stop=None,
+        metrics_collect_interval=10,
+        callbacks={
+            'gpu_monitor': GPUMemoryMonitorCallback(device_id=None, _num_alloc_retries=0),
+            'config_saver': ConfigSaverCallback(fname='config.json', save_data_paths=None, data_paths_fname=None, _config=None),
+            'garbage_collector': GarbageCollectorCallback(gc_interval=1000, enabled=True, _start_state=None),
+            'checkpointer': CheckpointerCallback(
+                save_interval=1000,
+                ephemeral_save_interval=500,
+                pre_train_checkpoint=None,
+                save_async=True,
+                remove='ephemeral_only',
+                ephemeral_cooldown=None,
+                fixed_steps=None,
+                enabled=True,
+                _latest_checkpoint_step=-1,
+                _latest_checkpoint_path='',
+                _checkpoints=[],
+                _ephemeral_checkpoints=[],
+                _checkpoints_to_remove=[]
+            ),
+            'checkpoint_retention': KeepLastNCheckpoints(keep_last=2, save_interval=1000, _persistent=[]),
+            'wandb': WandBCallback(
+                enabled=True,
+                name='olmo3-1b-sft-bf16-fulltest',
+                project='olmo3-7b-sft',
+                entity=None,
+                group=None,
+                tags=None,
+                notes=None,
+                config=None,
+                cancel_tags=['cancel', 'canceled', 'cancelled'],
+                cancel_check_interval=10,
+                _finalized=False
+            )
+        },
+        async_bookkeeping=None,
+        bookkeeping_soft_timeout=30,
+        no_checkpoints=False,
+        no_evals=False,
+        steps_to_skip=None
+    ),
+    init_seed=33333
+)
+SFTConfig(
+    run_name='olmo3-1b-sft-bf16-fulltest',
+    launch=None,
+    model=TransformerConfig(
+        d_model=2048,
+        vocab_size=100352,
+        n_layers=16,
+        block=TransformerBlockConfig(
+            sequence_mixer=AttentionConfig(
+                name='default',
+                n_heads=16,
+                n_kv_heads=None,
+                head_dim=None,
+                bias=False,
+                gate=None,
+                rope=RoPEConfig(name='default', theta=500000, full_precision=True, no_global_rope=False, scaling=None),
+                clip_qkv=None,
+                qk_norm=LayerNormConfig(name='rms', eps=1e-06, elementwise_affine=None, bias=False, full_precision=None, dtype='float32'),
+                dropout=None,
+                use_flash=None,
+                backend='torch',
+                dtype='float32',
+                sliding_window=None,
+                use_head_qk_norm=False
+            ),
+            layer_norm=LayerNormConfig(name='rms', eps=1e-06, elementwise_affine=None, bias=False, full_precision=None, dtype='float32'),
+            feed_forward=FeedForwardConfig(hidden_size=8192, name='default', bias=False, dtype='float32', activation='silu'),
+            feed_forward_moe=None,
+            name='reordered_norm',
+            dropout=None,
+            attention_residual_alpha=None,
+            feed_forward_residual_alpha=None
+        ),
+        lm_head=LMHeadConfig(
+            name='default',
+            layer_norm=LayerNormConfig(name='rms', eps=1e-06, elementwise_affine=None, bias=False, full_precision=None, dtype='float32'),
+            bias=False,
+            dtype='float32',
+            loss_implementation='fused_linear'
+        ),
+        embedding_norm=None,
+        name='default',
+        dtype='float32',
+        init_method='normal',
+        init_seed=0,
+        init_std=0.02,
+        embedding_init_std=None,
+        freeze_params=None,
+        block_pattern=None,
+        block_overrides=None,
+        embed_scale=None
+    ),
+    dataset=NumpyPackedFSLDatasetConfig(
+        tokenizer=TokenizerConfig(vocab_size=100278, eos_token_id=100257, pad_token_id=100277, bos_token_id=None, identifier='allenai/dolma2-tokenizer'),
+        paths=['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_*.npy'],
+        mix=None,
+        mix_base_dir=None,
+        expand_glob=True,
+        dtype=None,
+        metadata=None,
+        include_instance_metadata=True,
+        instance_filter_config=None,
+        source_permutation_seed=None,
+        work_dir='/tmp/olmo-sft/output/internal/_work',
+        ignore_fingerprint_mismatch=False,
+        sequence_length=8192,
+        generate_doc_lengths=False,
+        label_mask_paths=['/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_*.npy'],
+        long_doc_strategy='truncate',
+        source_group_size=1
+    ),
+    data_loader=NumpyDataLoaderConfig(
+        global_batch_size=16384,
+        seed=34521,
+        work_dir=None,
+        num_threads=None,
+        num_workers=4,
+        prefetch_factor=None,
+        target_device_type=None,
+        ignore_fingerprint_mismatch=False
+    ),
+    train_module=TransformerTrainModuleConfig(
+        rank_microbatch_size=8192,
+        max_sequence_length=8192,
+        optim=AdamWConfig(group_overrides=None, compile=False, fixed_fields=('initial_lr',), lr=1e-12, betas=(0.9, 0.95), eps=1e-08, weight_decay=0.0, foreach=None, fused=True),
+        max_grad_norm=1.0,
+        scheduler=LinearWithWarmup(
+            lr_field='lr',
+            initial_lr_field='initial_lr',
+            units='steps',
+            alpha_f=0.0,
+            t_max=None,
+            warmup=None,
+            warmup_steps=None,
+            warmup_fraction=0.03,
+            warmup_min_lr=0.0
+        ),
+        compile_model=True,
+        float8_config=None,
+        pp_config=None,
+        dp_config=TransformerDataParallelConfig(
+            name='hsdp',
+            param_dtype='bfloat16',
+            reduce_dtype='float32',
+            num_replicas=None,
+            shard_degree=2,
+            wrapping_strategy='full',
+            prefetch_factor=0
+        ),
+        tp_config=None,
+        cp_config=None,
+        ep_config=None,
+        ac_config=TransformerActivationCheckpointingConfig(mode='budget', block_interval=None, modules=None, activation_memory_budget=0.8),
+        z_loss_multiplier=None,
+        state_dict_save_opts=None,
+        state_dict_load_opts=None,
+        load_key_mapping=None,
+        autocast_precision=None,
+        label_ignore_index=-100
+    ),
+    trainer=TrainerConfig(
+        save_folder='/tmp/olmo-sft/output/internal/checkpoints/fields/olmo-sft/olmo3-1b-sft-bf16-fulltest',
+        work_dir=None,
+        load_path=None,
+        load_strategy='never',
+        load_optim_state=None,
+        load_trainer_state=None,
+        checkpointer=CheckpointerConfig(work_dir=None, save_overwrite=None, pre_download=False, save_thread_count=1, load_thread_count=32, throttle_uploads=True),
+        device=None,
+        save_overwrite=True,
+        max_duration=Duration(value=10, unit='steps'),
+        cancel_check_interval=10,
+        hard_stop=None,
+        metrics_collect_interval=10,
+        callbacks={
+            'gpu_monitor': GPUMemoryMonitorCallback(device_id=None, _num_alloc_retries=0),
+            'config_saver': ConfigSaverCallback(fname='config.json', save_data_paths=None, data_paths_fname=None, _config=None),
+            'garbage_collector': GarbageCollectorCallback(gc_interval=1000, enabled=True, _start_state=None),
+            'checkpointer': CheckpointerCallback(
+                save_interval=1000,
+                ephemeral_save_interval=500,
+                pre_train_checkpoint=None,
+                save_async=True,
+                remove='ephemeral_only',
+                ephemeral_cooldown=None,
+                fixed_steps=None,
+                enabled=True,
+                _latest_checkpoint_step=-1,
+                _latest_checkpoint_path='',
+                _checkpoints=[],
+                _ephemeral_checkpoints=[],
+                _checkpoints_to_remove=[]
+            ),
+            'checkpoint_retention': KeepLastNCheckpoints(keep_last=2, save_interval=1000, _persistent=[]),
+            'wandb': WandBCallback(
+                enabled=True,
+                name='olmo3-1b-sft-bf16-fulltest',
+                project='olmo3-7b-sft',
+                entity=None,
+                group=None,
+                tags=None,
+                notes=None,
+                config=None,
+                cancel_tags=['cancel', 'canceled', 'cancelled'],
+                cancel_check_interval=10,
+                _finalized=False
+            )
+        },
+        async_bookkeeping=None,
+        bookkeeping_soft_timeout=30,
+        no_checkpoints=False,
+        no_evals=False,
+        steps_to_skip=None
+    ),
+    init_seed=33333
+)
+2026-06-07 02:16:43.649	Iva:0	olmo_core.nn.transformer.config:361	INFO	Building transformer with 1,484,916,736 total params, 1,279,395,840 non-embedding params
+2026-06-07 02:16:43.662	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:16:43.663	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:16:43.664	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:16:43.664	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:16:43.665	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:16:43.666	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:16:43.667	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:16:43.668	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:16:43.669	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:16:43.669	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:16:43.670	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:16:43.671	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:16:43.672	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:16:43.673	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:16:43.673	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:16:43.674	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:16:43.675	Iva:0	olmo_core.nn.transformer.config:431	INFO	Transformer(
+  (embeddings): Embedding(100352, 2048)
+  (blocks): ModuleDict(
+    (0): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (1): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (2): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (3): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (4): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (5): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (6): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (7): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (8): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (9): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (10): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (11): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (12): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (13): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (14): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (15): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+  )
+  (lm_head): LMHead(
+    (norm): RMSNorm((2048,), eps=1e-06)
+    (w_out): Linear(in_features=2048, out_features=100352, bias=False)
+  )
+)
+2026-06-07 02:16:43.676	Iva:0	olmo_core.nn.transformer.config:432	INFO	Built model with:
+- 1,484,916,736 total params
+- 1,279,395,840 non-embedding params
+- 1,484,916,736 trainable params
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+2026-06-07 02:16:43.698	Iva:0	olmo_core.distributed.parallel:246	INFO	Built 2D device mesh with shape (dp_replicate=1, dp_shard=2)
+2026-06-07 02:16:43.698	Iva:0	olmo_core.train.train_module.transformer.train_module:141	INFO	Data parallel world size = 2
+2026-06-07 02:16:43.698	Iva:0	olmo_core.train.train_module.transformer.common:103	INFO	Applied 'budget' activation checkpointing to the model
+2026-06-07 02:16:44.404	Iva:0	olmo_core.train.train_module.transformer.common:110	INFO	Applied torch.compile() to the model
+2026-06-07 02:16:44.455	Iva:0	olmo_core.train.train_module.transformer.common:136	INFO	Applied FSDP to the model with 2D device mesh with shape (dp_replicate=1, dp_shard=2)
+2026-06-07 02:16:44.455	Iva:0	olmo_core.train.train_module.transformer.common:147	INFO	Initializing model weights...
+2026-06-07 02:16:45.055	Iva:0	olmo_core.train.train_module.transformer.train_module:198	INFO	Building optimizer...
+2026-06-07 02:16:45.057	Iva:0	olmo_core.optim.config:202	INFO	Building AdamW optimizer with 1 param group(s)...
+2026-06-07 02:16:45.057	Iva:0	olmo_core.optim.config:210	INFO	Group 0, 179 parameter(s):
+ - lr: 1e-12
+ - betas: (0.9, 0.95)
+ - eps: 1e-08
+ - weight_decay: 0.0
+ - amsgrad: False
+ - maximize: False
+ - foreach: None
+ - capturable: False
+ - differentiable: False
+ - fused: True
+ - decoupled_weight_decay: True
+ - initial_lr: 1e-12
+2026-06-07 02:16:45.057	Iva:0	olmo_core.data.numpy_dataset:2399	INFO	Expanding '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_*.npy'...
+2026-06-07 02:16:45.057	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0000.npy'
+2026-06-07 02:16:45.057	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0001.npy'
+2026-06-07 02:16:45.057	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0002.npy'
+2026-06-07 02:16:45.057	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0003.npy'
+2026-06-07 02:16:45.057	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0004.npy'
+2026-06-07 02:16:45.057	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0005.npy'
+2026-06-07 02:16:45.057	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0006.npy'
+2026-06-07 02:16:45.057	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0007.npy'
+2026-06-07 02:16:45.057	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0008.npy'
+2026-06-07 02:16:45.057	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0009.npy'
+2026-06-07 02:16:45.057	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0010.npy'
+2026-06-07 02:16:45.057	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0011.npy'
+2026-06-07 02:16:45.057	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0012.npy'
+2026-06-07 02:16:45.057	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0013.npy'
+2026-06-07 02:16:45.057	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0014.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0015.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0016.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0017.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0018.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0019.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0020.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0021.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0022.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2399	INFO	Expanding '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_*.npy'...
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0000.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0001.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0002.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0003.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0004.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0005.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0006.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0007.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0008.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0009.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0010.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0011.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0012.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0013.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0014.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0015.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0016.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0017.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0018.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0019.npy'
+2026-06-07 02:16:45.058	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0020.npy'
+2026-06-07 02:16:45.059	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0021.npy'
+2026-06-07 02:16:45.059	Iva:0	olmo_core.data.numpy_dataset:2414	INFO	 - '/tmp/olmo-sft/work/datasets/fields/olmocore/labels_mask_part_0022.npy'
+2026-06-07 02:16:45.059	Iva:0	olmo_core.data.numpy_dataset:2391	INFO	Assuming dtype 'uint32' based on vocab size
+2026-06-07 02:16:45.059	Iva:0	olmo_core.data.numpy_dataset:1116	INFO	Packing document into instances...
+2026-06-07 02:16:45.061	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0000.npy']
+2026-06-07 02:16:45.061	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0001.npy']
+2026-06-07 02:16:45.062	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0002.npy']
+2026-06-07 02:16:45.062	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0003.npy']
+2026-06-07 02:16:45.062	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0004.npy']
+2026-06-07 02:16:45.062	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0005.npy']
+2026-06-07 02:16:45.062	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0006.npy']
+2026-06-07 02:16:45.062	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0007.npy']
+2026-06-07 02:16:45.062	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0008.npy']
+2026-06-07 02:16:45.062	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0009.npy']
+2026-06-07 02:16:45.062	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0010.npy']
+2026-06-07 02:16:45.062	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0011.npy']
+2026-06-07 02:16:45.062	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0012.npy']
+2026-06-07 02:16:45.063	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0013.npy']
+2026-06-07 02:16:45.063	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0014.npy']
+2026-06-07 02:16:45.063	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0015.npy']
+2026-06-07 02:16:45.063	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0016.npy']
+2026-06-07 02:16:45.063	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0017.npy']
+2026-06-07 02:16:45.063	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0018.npy']
+2026-06-07 02:16:45.063	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0019.npy']
+2026-06-07 02:16:45.063	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0020.npy']
+2026-06-07 02:16:45.063	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0021.npy']
+2026-06-07 02:16:45.063	Iva:0	olmo_core.data.numpy_dataset:1313	INFO	Reusing cached packing results for ['/tmp/olmo-sft/work/datasets/fields/olmocore/token_ids_part_0022.npy']
+2026-06-07 02:16:45.067	Iva:0	olmo_core.train.trainer:374	INFO	Creating new process group for async bookkeeping
+[Gloo] Rank 1 is connected to 1[Gloo] Rank  peer ranks. Expected number of connected peer ranks is : 01 is connected to 1
+ peer ranks. Expected number of connected peer ranks is : 1
+2026-06-07 02:16:45.070	Iva:0	__main__:735	INFO	Saving tokenizer...
+2026-06-07 02:16:45.070	Iva:0	__main__:738	INFO	Tokenizer already exists: /tmp/olmo-sft/output/internal/checkpoints/fields/olmo-sft/olmo3-1b-sft-bf16-fulltest/tokenizer
+2026-06-07 02:16:45.071	Iva:0	__main__:749	INFO	Loading checkpoint...
+2026-06-07 02:16:45.075	Iva:0	__main__:751	INFO	No checkpoint found in save folder '/tmp/olmo-sft/output/internal/checkpoints/fields/olmo-sft/olmo3-1b-sft-bf16-fulltest', attempting to load from pretraining checkpoint '/tmp/olmo-sft/work/base-distcp/model_and_optim'
+2026-06-07 02:16:45.079	Iva:0	olmo_core.train.trainer:902	INFO	Loading checkpoint from '/tmp/olmo-sft/work/base-distcp/model_and_optim'...
+2026-06-07 02:16:45.081	Iva:0	olmo_core.train.train_module.transformer.train_module:264	WARNING	No optimizer state found in checkpoint
+2026-06-07 02:16:45.083	Iva:1	olmo_core.train.train_module.transformer.train_module:264	WARNING	No optimizer state found in checkpoint
+2026-06-07 02:16:50.883	Iva:0	olmo_core.train.trainer:923	INFO	Checkpoint successfully loaded
+2026-06-07 02:16:50.884	Iva:0	olmo_core.train.trainer:714	INFO	Callback order:
+2026-06-07 02:16:50.884	Iva:0	olmo_core.train.trainer:716	INFO	  - Callback 1: checkpointer
+2026-06-07 02:16:50.884	Iva:0	olmo_core.train.trainer:716	INFO	  - Callback 2: config_saver
+2026-06-07 02:16:50.884	Iva:0	olmo_core.train.trainer:716	INFO	  - Callback 3: garbage_collector
+2026-06-07 02:16:50.884	Iva:0	olmo_core.train.trainer:716	INFO	  - Callback 4: checkpoint_retention
+2026-06-07 02:16:50.884	Iva:0	olmo_core.train.trainer:716	INFO	  - Callback 5: wandb
+2026-06-07 02:16:50.884	Iva:0	olmo_core.train.trainer:716	INFO	  - Callback 6: console_logger
+2026-06-07 02:16:50.884	Iva:0	olmo_core.train.trainer:716	INFO	  - Callback 7: gpu_monitor
+2026-06-07 02:16:50.884	Iva:0	olmo_core.train.trainer:716	INFO	  - Callback 8: speed_monitor
+2026-06-07 02:16:50.884	Iva:0	olmo_core.train.trainer:719	INFO	Training for 10 steps
+2026-06-07 02:16:50.884	Iva:0	olmo_core.train.callbacks.checkpointer:211	INFO	Creating new process group for checkpointing (needed for async checkpointing)
+[Gloo] Rank [Gloo] Rank 01 is connected to  is connected to 11 peer ranks.  peer ranks. Expected number of connected peer ranks is : Expected number of connected peer ranks is : 11
+
+2026-06-07 02:16:50.886	Iva:0	olmo_core.train.callbacks.garbage_collector:33	INFO	Automatic GC disabled for training, will run GC every 1000 steps
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+wandb: Currently logged in as: hav4ik to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: Using an existing wandb-core service via WANDB_SERVICE.
+wandb: Tracking run with wandb version 0.27.0
+wandb: Run data is saved locally in /tmp/olmo-sft/output/internal/checkpoints/fields/olmo-sft/olmo3-1b-sft-bf16-fulltest/wandb/wandb/run-20260607_021651-olmo3-1b-sft-bf16-fulltest
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Resuming run olmo3-1b-sft-bf16-fulltest
+wandb: ⭐️ View project at https://wandb.ai/hav4ik/olmo3-7b-sft
+wandb: 🚀 View run at https://wandb.ai/hav4ik/olmo3-7b-sft/runs/olmo3-1b-sft-bf16-fulltest
+2026-06-07 02:16:52.081	Iva:0	olmo_core.train.callbacks.gpu_memory_monitor:41	INFO	GPU capacity: NVIDIA GeForce RTX 3090 with 23.56GiB memory of which 2.89GiB is currently allocated and 3.28GiB is currently reserved.
+2026-06-07 02:16:52.082	Iva:0	olmo_core.train.callbacks.speed_monitor:114	INFO	Device: NVIDIA GeForce RTX 3090, Device peak Flops/s: 312000000000000
+2026-06-07 02:16:52.082	Iva:0	olmo_core.train.trainer:1462	INFO	Starting forward/backward dry-run batch...
+2026-06-07 02:16:52.152	Iva:0	py.warnings:112	WARNING	/opt/conda/lib/python3.12/site-packages/torch/_dynamo/pgo.py:539: UserWarning: dynamo_pgo force disabled by torch.compiler.config.force_disable_caches
+  warn_once(
+
+2026-06-07 02:16:52.152	Iva:1	py.warnings:112	WARNING	/opt/conda/lib/python3.12/site-packages/torch/_dynamo/pgo.py:539: UserWarning: dynamo_pgo force disabled by torch.compiler.config.force_disable_caches
+  warn_once(
+
+2026-06-07 02:17:01.614	Iva:0	olmo_core.train.trainer:1464	INFO	Dry-run complete
+2026-06-07 02:17:01.615	Iva:0	olmo_core.data.data_loader:517	INFO	Using existing global indices file for seed 34521 and epoch 1 at:
+'/tmp/olmo-sft/output/internal/_work/global_indices_dataset_size287365_epoch1_seed34521_v1.npy'
+2026-06-07 02:17:01.616	Iva:0	olmo_core.train.trainer:1469	INFO	Starting epoch 1...
+Skipping import of cpp extensions due to incompatible torch version 2.10.0+cu130 for torchao version 0.15.0             Please see https://github.com/pytorch/ao/issues/2919 for more info
+Skipping import of cpp extensions due to incompatible torch version 2.10.0+cu130 for torchao version 0.15.0             Please see https://github.com/pytorch/ao/issues/2919 for more info
+Skipping import of cpp extensions due to incompatible torch version 2.10.0+cu130 for torchao version 0.15.0             Please see https://github.com/pytorch/ao/issues/2919 for more info
+Skipping import of cpp extensions due to incompatible torch version 2.10.0+cu130 for torchao version 0.15.0             Please see https://github.com/pytorch/ao/issues/2919 for more info
+Skipping import of cpp extensions due to incompatible torch version 2.10.0+cu130 for torchao version 0.15.0             Please see https://github.com/pytorch/ao/issues/2919 for more info
+Skipping import of cpp extensions due to incompatible torch version 2.10.0+cu130 for torchao version 0.15.0             Please see https://github.com/pytorch/ao/issues/2919 for more info
+Skipping import of cpp extensions due to incompatible torch version 2.10.0+cu130 for torchao version 0.15.0             Please see https://github.com/pytorch/ao/issues/2919 for more info
+Skipping import of cpp extensions due to incompatible torch version 2.10.0+cu130 for torchao version 0.15.0             Please see https://github.com/pytorch/ao/issues/2919 for more info
+2026-06-07 02:17:09.169	Iva:1	py.warnings:112	WARNING	/opt/conda/lib/python3.12/site-packages/torch/distributed/utils.py:106: UserWarning: called a synchronizing CUDA operation (Triggered internally at /pytorch/c10/cuda/CUDAFunctions.cpp:162.)
+  return (obj.to(target_device),)
+
+2026-06-07 02:17:09.169	Iva:0	py.warnings:112	WARNING	/opt/conda/lib/python3.12/site-packages/torch/distributed/utils.py:106: UserWarning: called a synchronizing CUDA operation (Triggered internally at /pytorch/c10/cuda/CUDAFunctions.cpp:162.)
+  return (obj.to(target_device),)
+
+2026-06-07 02:17:09.173	Iva:0	olmo_core.train.callbacks.console_logger:68	INFO	[step=1/10,epoch=1]
+    gpu_memory/GPU active mem (%)=60.43
+    gpu_memory/GPU active mem (GiB)=14.24
+    gpu_memory/GPU reserved mem (%)=78.74
+    gpu_memory/GPU reserved mem (GiB)=18.55
+    optim/LR (group 0)=9.00E-13
+    optim/total grad norm=46.26
+    train/CE loss=3.862
+    throughput/device/data loading (s)=5.455
+    train/PPL=47.57
+2026-06-07 02:17:09.632	Iva:0	py.warnings:112	WARNING	/opt/conda/lib/python3.12/site-packages/liger_kernel/ops/fused_linear_cross_entropy.py:75: UserWarning: called a synchronizing CUDA operation (Triggered internally at /pytorch/c10/cuda/CUDAFunctions.cpp:162.)
+  total_n_non_ignore = target_mask.sum().item()
+
+2026-06-07 02:17:09.686	Iva:1	py.warnings:112	WARNING	/opt/conda/lib/python3.12/site-packages/liger_kernel/ops/fused_linear_cross_entropy.py:75: UserWarning: called a synchronizing CUDA operation (Triggered internally at /pytorch/c10/cuda/CUDAFunctions.cpp:162.)
+  total_n_non_ignore = target_mask.sum().item()
+
+2026-06-07 02:17:09.997	Iva:0	py.warnings:112	WARNING	/opt/conda/lib/python3.12/site-packages/liger_kernel/ops/fused_linear_cross_entropy.py:233: UserWarning: called a synchronizing CUDA operation (Triggered internally at /pytorch/c10/cuda/CUDAFunctions.cpp:162.)
+  if not torch.equal(grad_output, torch.tensor(1.0, device=grad_output.device)):
+
+2026-06-07 02:17:10.033	Iva:1	py.warnings:112	WARNING	/opt/conda/lib/python3.12/site-packages/liger_kernel/ops/fused_linear_cross_entropy.py:233: UserWarning: called a synchronizing CUDA operation (Triggered internally at /pytorch/c10/cuda/CUDAFunctions.cpp:162.)
+  if not torch.equal(grad_output, torch.tensor(1.0, device=grad_output.device)):
+
+2026-06-07 02:17:11.258	Iva:1	olmo_core.train.callbacks.gpu_memory_monitor:64	WARNING	3 CUDA memory allocation retries.
+2026-06-07 02:17:11.260	Iva:0	olmo_core.train.callbacks.console_logger:61	INFO	[step=2/10,epoch=1]
+2026-06-07 02:17:11.260	Iva:0	olmo_core.train.callbacks.gpu_memory_monitor:64	WARNING	2 CUDA memory allocation retries.
+wandb: WARNING Tried to log to step 0 that is less than the current step 11. Steps must be monotonically increasing, so this data will be ignored. See https://wandb.me/define-metric to log data out of order.
+wandb: WARNING Tried to log to step 1 that is less than the current step 11. Steps must be monotonically increasing, so this data will be ignored. See https://wandb.me/define-metric to log data out of order.
+2026-06-07 02:17:13.421	Iva:0	olmo_core.train.callbacks.console_logger:61	INFO	[step=3/10,epoch=1]
+2026-06-07 02:17:13.422	Iva:0	olmo_core.train.callbacks.gpu_memory_monitor:64	WARNING	4 CUDA memory allocation retries.
+2026-06-07 02:17:13.424	Iva:1	olmo_core.train.callbacks.gpu_memory_monitor:64	WARNING	6 CUDA memory allocation retries.
+2026-06-07 02:17:15.625	Iva:0	olmo_core.train.callbacks.console_logger:61	INFO	[step=4/10,epoch=1]
+2026-06-07 02:17:15.626	Iva:0	olmo_core.train.callbacks.gpu_memory_monitor:64	WARNING	6 CUDA memory allocation retries.
+2026-06-07 02:17:15.626	Iva:1	olmo_core.train.callbacks.gpu_memory_monitor:64	WARNING	9 CUDA memory allocation retries.
+2026-06-07 02:17:17.822	Iva:0	olmo_core.train.callbacks.console_logger:61	INFO	[step=5/10,epoch=1]
+2026-06-07 02:17:17.822	Iva:1	olmo_core.train.callbacks.gpu_memory_monitor:64	WARNING	12 CUDA memory allocation retries.
+2026-06-07 02:17:17.823	Iva:0	olmo_core.train.callbacks.gpu_memory_monitor:64	WARNING	8 CUDA memory allocation retries.
+2026-06-07 02:17:20.019	Iva:1	olmo_core.train.callbacks.gpu_memory_monitor:64	WARNING	15 CUDA memory allocation retries.
+2026-06-07 02:17:20.019	Iva:0	olmo_core.train.callbacks.console_logger:61	INFO	[step=6/10,epoch=1]
+2026-06-07 02:17:20.020	Iva:0	olmo_core.train.callbacks.gpu_memory_monitor:64	WARNING	10 CUDA memory allocation retries.
+2026-06-07 02:17:21.108	Iva:1	py.warnings:112	WARNING	/opt/conda/lib/python3.12/site-packages/liger_kernel/ops/fused_linear_cross_entropy.py:233: UserWarning: called a synchronizing CUDA operation (Triggered internally at /pytorch/c10/cuda/CUDAFunctions.cpp:162.)
+  if not torch.equal(grad_output, torch.tensor(1.0, device=grad_output.device)):
+
+2026-06-07 02:17:22.373	Iva:0	olmo_core.train.callbacks.console_logger:61	INFO	[step=7/10,epoch=1]
+2026-06-07 02:17:22.374	Iva:1	olmo_core.train.callbacks.gpu_memory_monitor:64	WARNING	18 CUDA memory allocation retries.
+2026-06-07 02:17:22.374	Iva:0	olmo_core.train.callbacks.gpu_memory_monitor:64	WARNING	12 CUDA memory allocation retries.
+2026-06-07 02:17:22.424	Iva:1	py.warnings:112	WARNING	/opt/conda/lib/python3.12/site-packages/torch/distributed/utils.py:106: UserWarning: called a synchronizing CUDA operation (Triggered internally at /pytorch/c10/cuda/CUDAFunctions.cpp:162.)
+  return (obj.to(target_device),)
+
+2026-06-07 02:17:22.966	Iva:1	py.warnings:112	WARNING	/opt/conda/lib/python3.12/site-packages/liger_kernel/ops/fused_linear_cross_entropy.py:75: UserWarning: called a synchronizing CUDA operation (Triggered internally at /pytorch/c10/cuda/CUDAFunctions.cpp:162.)
+  total_n_non_ignore = target_mask.sum().item()
+
+2026-06-07 02:17:24.569	Iva:0	olmo_core.train.callbacks.console_logger:61	INFO	[step=8/10,epoch=1]
+2026-06-07 02:17:24.570	Iva:0	olmo_core.train.callbacks.gpu_memory_monitor:64	WARNING	14 CUDA memory allocation retries.
+2026-06-07 02:17:24.572	Iva:1	olmo_core.train.callbacks.gpu_memory_monitor:64	WARNING	21 CUDA memory allocation retries.
+2026-06-07 02:17:26.757	Iva:0	olmo_core.train.callbacks.console_logger:61	INFO	[step=9/10,epoch=1]
+2026-06-07 02:17:26.757	Iva:0	olmo_core.train.callbacks.gpu_memory_monitor:64	WARNING	16 CUDA memory allocation retries.
+2026-06-07 02:17:26.759	Iva:1	olmo_core.train.callbacks.gpu_memory_monitor:64	WARNING	24 CUDA memory allocation retries.
+2026-06-07 02:17:28.941	Iva:0	olmo_core.train.callbacks.gpu_memory_monitor:64	WARNING	18 CUDA memory allocation retries.
+2026-06-07 02:17:28.942	Iva:1	olmo_core.train.callbacks.gpu_memory_monitor:64	WARNING	27 CUDA memory allocation retries.
+2026-06-07 02:17:28.999	Iva:0	olmo_core.train.callbacks.console_logger:68	INFO	[step=10/10,epoch=1]
+    gpu_memory/GPU active mem (%)=83.91
+    gpu_memory/GPU active mem (GiB)=19.77
+    gpu_memory/GPU reserved mem (%)=96.11
+    gpu_memory/GPU reserved mem (GiB)=22.64
+    optim/LR (group 0)=0.0
+    optim/total grad norm=39.97
+    throughput/chinchilla multiple=6.40E-06
+    throughput/device/BPS=0.4577
+    throughput/device/BPS (actual avg)=0.4540
+    throughput/device/MFU=13.10
+    throughput/device/MFU (actual avg)=12.99
+    throughput/device/TPS=3,749
+    throughput/device/TPS (actual avg)=3,719
+    throughput/device/flopsPS=40.86T
+    throughput/device/flopsPS (actual avg)=40.53T
+    throughput/total petaflops=1.785
+    throughput/total tokens=163,840
+    train/CE loss=3.241
+    throughput/device/data loading (%)=0.0050
+    throughput/device/data loading (s)=0.0001
+    train/PPL=25.56
+2026-06-07 02:17:30.551	Iva:0	olmo_core.train.trainer:970	INFO	Saving checkpoint for step 10 to '/tmp/olmo-sft/output/internal/checkpoints/fields/olmo-sft/olmo3-1b-sft-bf16-fulltest/step10'...
+2026-06-07 02:17:30.551	Iva:0	olmo_core.train.trainer:1362	INFO	Waiting for bookkeeping ops to finish: 'Trainer._check_if_canceled' (1 ops)...
+2026-06-07 02:17:30.552	Iva:0	olmo_core.train.trainer:1367	INFO	All bookkeeping ops complete
+2026-06-07 02:17:30.798	Iva:0	py.warnings:112	WARNING	/opt/conda/lib/python3.12/site-packages/torch/distributed/_state_dict_utils.py:183: UserWarning: called a synchronizing CUDA operation (Triggered internally at /pytorch/c10/cuda/CUDAFunctions.cpp:162.)
+  ret = ret.to(cpu_device)
+
+2026-06-07 02:17:31.309	Iva:1	py.warnings:112	WARNING	/opt/conda/lib/python3.12/site-packages/torch/distributed/_state_dict_utils.py:183: UserWarning: called a synchronizing CUDA operation (Triggered internally at /pytorch/c10/cuda/CUDAFunctions.cpp:162.)
+  ret = ret.to(cpu_device)
+
+wandb: WARNING Tried to log to step 2 that is less than the current step 11. Steps must be monotonically increasing, so this data will be ignored. See https://wandb.me/define-metric to log data out of order.
+wandb: WARNING Tried to log to step 3 that is less than the current step 11. Steps must be monotonically increasing, so this data will be ignored. See https://wandb.me/define-metric to log data out of order.
+wandb: WARNING Tried to log to step 4 that is less than the current step 11. Steps must be monotonically increasing, so this data will be ignored. See https://wandb.me/define-metric to log data out of order.
+wandb: WARNING Tried to log to step 5 that is less than the current step 11. Steps must be monotonically increasing, so this data will be ignored. See https://wandb.me/define-metric to log data out of order.
+wandb: WARNING Tried to log to step 6 that is less than the current step 11. Steps must be monotonically increasing, so this data will be ignored. See https://wandb.me/define-metric to log data out of order.
+wandb: WARNING Tried to log to step 7 that is less than the current step 11. Steps must be monotonically increasing, so this data will be ignored. See https://wandb.me/define-metric to log data out of order.
+wandb: WARNING Tried to log to step 8 that is less than the current step 11. Steps must be monotonically increasing, so this data will be ignored. See https://wandb.me/define-metric to log data out of order.
+wandb: WARNING Tried to log to step 9 that is less than the current step 11. Steps must be monotonically increasing, so this data will be ignored. See https://wandb.me/define-metric to log data out of order.
+wandb: WARNING Tried to log to step 10 that is less than the current step 11. Steps must be monotonically increasing, so this data will be ignored. See https://wandb.me/define-metric to log data out of order.
+2026-06-07 02:18:14.244	Iva:0	olmo_core.train.trainer:990	INFO	Checkpoint saved
+2026-06-07 02:18:14.245	Iva:0	olmo_core.train.trainer:1362	INFO	Waiting for bookkeeping ops to finish: 'reduce_metrics' (1 ops)...
+2026-06-07 02:18:14.743	Iva:0	olmo_core.train.callbacks.console_logger:68	INFO	[step=10/10,epoch=1]
+    checkpoint/save_duration_s=43.70
+2026-06-07 02:18:14.743	Iva:0	olmo_core.train.trainer:1367	INFO	All bookkeeping ops complete
+2026-06-07 02:18:14.744	Iva:0	olmo_core.train.callbacks.wandb:116	INFO	Finalizing successful W&B run...
+wandb: WARNING The `quiet` argument to `wandb.run.finish()` is deprecated, use `wandb.Settings(quiet=...)` to set this instead.
+wandb: updating run metadata
+wandb: uploading summary, console lines 84-91
+wandb: WARNING Tried to log to step 10 that is less than the current step 11. Steps must be monotonically increasing, so this data will be ignored. See https://wandb.me/define-metric to log data out of order.
+wandb: 
+wandb: Run summary:
+wandb:        checkpoint/load_duration_s 12.8878
+wandb:        checkpoint/save_duration_s 44.25995
+wandb:     gpu_memory/GPU active mem (%) 83.91023
+wandb:   gpu_memory/GPU active mem (GiB) 19.76986
+wandb:   gpu_memory/GPU reserved mem (%) 96.11133
+wandb: gpu_memory/GPU reserved mem (GiB) 22.64453
+wandb:                optim/LR (group 0) 0
+wandb:             optim/total grad norm 39.97501
+wandb:                       setup/phase training
+wandb:                   setup/total_sec 0
+wandb:                               +16 ...
+wandb: 
+wandb: 🚀 View run olmo3-1b-sft-bf16-fulltest at: https://wandb.ai/hav4ik/olmo3-7b-sft/runs/olmo3-1b-sft-bf16-fulltest
+wandb: ⭐️ View project at: https://wandb.ai/hav4ik/olmo3-7b-sft
+wandb: Synced 5 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: /tmp/olmo-sft/output/internal/checkpoints/fields/olmo-sft/olmo3-1b-sft-bf16-fulltest/wandb/wandb/run-20260607_021651-olmo3-1b-sft-bf16-fulltest/logs
+2026-06-07 02:18:15.714	Iva:0	olmo_core.train.trainer:764	INFO	Training complete
+2026-06-07 02:18:19,173 [INFO] fields.train: upload watcher stopped
+2026-06-07 02:18:19,173 [INFO] fields.train: training finished in 2.1 min
+2026-06-07 02:18:19,173 [INFO] fields.train: auto-upload (final): /opt/conda/bin/python /app/upload.py --output /tmp/olmo-sft/output --seq-len 8192 --final --retries 10 (CPU-only)
+2026-06-07 02:18:19,210 [INFO] fields.secrets: loaded secrets from /app/SECRETS.json (set: none new)
+2026-06-07 02:18:19,222 [INFO] fields.upload: final checkpoint: /tmp/olmo-sft/output/internal/checkpoints/fields/olmo-sft/olmo3-1b-sft-bf16-fulltest/step10
+2026-06-07 02:18:19,222 [INFO] fields.upload: converting /tmp/olmo-sft/output/internal/checkpoints/fields/olmo-sft/olmo3-1b-sft-bf16-fulltest/step10 -> /tmp/olmo-sft/output/model
+W0607 02:18:22.888000 1053 site-packages/torch/utils/cpp_extension.py:118] No CUDA runtime is found, using CUDA_HOME='/opt/fields'
+Skipping import of cpp extensions due to incompatible torch version 2.10.0+cu130 for torchao version 0.15.0             Please see https://github.com/pytorch/ao/issues/2919 for more info
+2026-06-07 02:18:23.759	Iva:0	olmo_core.utils:237	INFO	Setting env var 'OMP_NUM_THREADS' to '8'
+2026-06-07 02:18:23.759	Iva:0	olmo_core.utils:237	INFO	Setting env var 'TOKENIZERS_PARALLELISM' to 'false'
+TransformerConfig(
+    d_model=2048,
+    vocab_size=100352,
+    n_layers=16,
+    block=TransformerBlockConfig(
+        sequence_mixer=AttentionConfig(
+            name='default',
+            n_heads=16,
+            n_kv_heads=None,
+            head_dim=None,
+            bias=False,
+            gate=None,
+            rope=RoPEConfig(name='default', theta=500000, full_precision=True, no_global_rope=False, scaling=None),
+            clip_qkv=None,
+            qk_norm=LayerNormConfig(name='rms', eps=1e-06, elementwise_affine=None, bias=False, full_precision=None, dtype='float32'),
+            dropout=None,
+            use_flash=None,
+            backend='torch',
+            dtype='float32',
+            sliding_window=None,
+            use_head_qk_norm=False
+        ),
+        layer_norm=LayerNormConfig(name='rms', eps=1e-06, elementwise_affine=None, bias=False, full_precision=None, dtype='float32'),
+        feed_forward=FeedForwardConfig(hidden_size=8192, name='default', bias=False, dtype='float32', activation='silu'),
+        feed_forward_moe=None,
+        name='reordered_norm',
+        dropout=None,
+        attention_residual_alpha=None,
+        feed_forward_residual_alpha=None
+    ),
+    lm_head=LMHeadConfig(
+        name='default',
+        layer_norm=LayerNormConfig(name='rms', eps=1e-06, elementwise_affine=None, bias=False, full_precision=None, dtype='float32'),
+        bias=False,
+        dtype='float32',
+        loss_implementation='fused_linear'
+    ),
+    embedding_norm=None,
+    name='default',
+    dtype='float32',
+    init_method='normal',
+    init_seed=0,
+    init_std=0.02,
+    embedding_init_std=None,
+    freeze_params=None,
+    block_pattern=None,
+    block_overrides=None,
+    embed_scale=None
+)
+2026-06-07 02:18:23.765	Iva:0	olmo_core.nn.transformer.config:361	INFO	Building transformer with 1,484,916,736 total params, 1,279,395,840 non-embedding params
+2026-06-07 02:18:23.767	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:18:23.768	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:18:23.769	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:18:23.770	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:18:23.771	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:18:23.772	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:18:23.772	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:18:23.773	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:18:23.774	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:18:23.775	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:18:23.776	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:18:23.777	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:18:23.777	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:18:23.778	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:18:23.779	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:18:23.780	Iva:0	olmo_core.nn.attention:471	INFO	Using attention backend 'torch'
+2026-06-07 02:18:23.781	Iva:0	olmo_core.nn.transformer.config:431	INFO	Transformer(
+  (embeddings): Embedding(100352, 2048)
+  (blocks): ModuleDict(
+    (0): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (1): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (2): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (3): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (4): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (5): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (6): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (7): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (8): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (9): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (10): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (11): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (12): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (13): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (14): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+    (15): ReorderedNormTransformerBlock(
+      (attention): Attention(
+        (w_q): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_k): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_v): Linear(in_features=2048, out_features=2048, bias=False)
+        (w_out): Linear(in_features=2048, out_features=2048, bias=False)
+        (q_norm): RMSNorm((2048,), eps=1e-06)
+        (k_norm): RMSNorm((2048,), eps=1e-06)
+        (rope): RotaryEmbedding()
+        (backend): TorchAttentionBackend()
+      )
+      (attention_norm): RMSNorm((2048,), eps=1e-06)
+      (attention_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+      (feed_forward): FeedForward(
+        (w1): Linear(in_features=2048, out_features=8192, bias=False)
+        (w2): Linear(in_features=8192, out_features=2048, bias=False)
+        (w3): Linear(in_features=2048, out_features=8192, bias=False)
+      )
+      (feed_forward_norm): RMSNorm((2048,), eps=1e-06)
+      (feed_forward_residual_stream): ResidualStream(
+        (dropout): Identity()
+      )
+    )
+  )
+  (lm_head): LMHead(
+    (norm): RMSNorm((2048,), eps=1e-06)
+    (w_out): Linear(in_features=2048, out_features=100352, bias=False)
+  )
+)
+2026-06-07 02:18:23.782	Iva:0	olmo_core.nn.transformer.config:432	INFO	Built model with:
+- 1,484,916,736 total params
+- 1,279,395,840 non-embedding params
+- 1,484,916,736 trainable params
+2026-06-07 02:18:23.787	Iva:0	olmo_core.nn.hf.convert_checkpoint:172	INFO	Saving preexisting tokenizer from /tmp/olmo-sft/output/internal/checkpoints/fields/olmo-sft/olmo3-1b-sft-bf16-fulltest/tokenizer
+Successfully saved model tokenizer to '/tmp/olmo-sft/output/model'
+2026-06-07 02:18:24.304	Iva:0	olmo_core.nn.hf.convert_checkpoint:204	INFO	Loading checkpoint from '/tmp/olmo-sft/output/internal/checkpoints/fields/olmo-sft/olmo3-1b-sft-bf16-fulltest/step10/model_and_optim'
+2026-06-07 02:18:24.319	Iva:0	py.warnings:112	WARNING	/opt/conda/lib/python3.12/site-packages/torch/distributed/checkpoint/utils.py:483: UserWarning: torch.distributed is disabled, unavailable or uninitialized, assuming the intent is to load in a single process.
+  return func(*args, **kwargs)
+
+2026-06-07 02:18:29.342	Iva:0	olmo_core.nn.hf.convert_checkpoint:210	INFO	Saving checkpoint to '/tmp/olmo-sft/output/model'
+2026-06-07 02:18:30.197	Iva:0	olmo_core.nn.hf.checkpoint:36	WARNING	accelerate not installed, will initialize weights.
+2026-06-07 02:18:30.197	Iva:0	olmo_core.nn.hf.checkpoint:174	INFO	Initializing HF model with empty weights...
+Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|██████████| 1/1 [00:09<00:00,  9.47s/it]Writing model shards: 100%|██████████| 1/1 [00:09<00:00,  9.47s/it]
+2026-06-07 02:18:53.887	Iva:0	olmo_core.nn.hf.convert_checkpoint:268	INFO	Successfully saved converted model to '/tmp/olmo-sft/output/model'
+2026-06-07 02:18:53.887	Iva:0	olmo_core.nn.hf.convert_checkpoint:271	INFO	Fixing HF config using updated config from tokenizer config data and script arguments
+2026-06-07 02:18:53.889	Iva:0	olmo_core.nn.hf.convert_checkpoint:280	INFO	Successfully fixed config using updated config from tokenizer config data and script arguments
+2026-06-07 02:18:55,311 [INFO] fields.upload: config: mirrored rope_parameters -> rope_scaling + rope_theta (transformers 4.x/vLLM compat)
+2026-06-07 02:18:56,261 [INFO] fields.upload: export fits in one shard (<= 5000000000 B); leaving single file
+2026-06-07 02:18:56,261 [INFO] fields.upload: HF model ready at /tmp/olmo-sft/output/model
+2026-06-07 02:18:56,716 [INFO] httpx: HTTP Request: POST https://huggingface.co/api/repos/create "HTTP/1.1 200 OK"
+2026-06-07 02:18:56,716 [INFO] fields.upload: uploading /tmp/olmo-sft/output/model -> hf://models/chankhavu/olmo_1b_bf16_fulltest_final_20260607021856 (public) [attempt 1/10]
+2026-06-07 02:18:58,382 [INFO] httpx: HTTP Request: POST https://huggingface.co/api/models/chankhavu/olmo_1b_bf16_fulltest_final_20260607021856/preupload/main "HTTP/1.1 200 OK"
+2026-06-07 02:18:58,471 [INFO] httpx: HTTP Request: POST https://huggingface.co/chankhavu/olmo_1b_bf16_fulltest_final_20260607021856.git/info/lfs/objects/batch "HTTP/1.1 200 OK"
+2026-06-07 02:18:58,605 [INFO] httpx: HTTP Request: GET https://huggingface.co/api/models/chankhavu/olmo_1b_bf16_fulltest_final_20260607021856/xet-write-token/main "HTTP/1.1 200 OK"
+Processing Files (0 / 0)      : |          |  0.00B /  0.00B            
+New Data Upload               : |          |  0.00B /  0.00B            [A
+
+  ...t/model/model.safetensors:  14%|█▍        |  416MB / 2.97GB            [A[A
+
+  ...t/model/model.safetensors:  14%|█▍        |  416MB / 2.97GB            [A[AProcessing Files (0 / 1)      :  14%|█▍        |  416MB / 2.97GB,   ???B/s  
+
+  ...t/model/model.safetensors:  30%|███       |  896MB / 2.97GB            [A[AProcessing Files (0 / 1)      :  30%|███       |  896MB / 2.97GB,   ???B/s  
+
+  ...t/model/model.safetensors:  40%|████      | 1.19GB / 2.97GB            [A[AProcessing Files (0 / 1)      :  40%|████      | 1.19GB / 2.97GB,  114MB/s  
+
+  ...t/model/model.safetensors:  50%|█████     | 1.50GB / 2.97GB            [A[AProcessing Files (0 / 1)      :  50%|█████     | 1.50GB / 2.97GB,  141MB/s  
+
+  ...t/model/model.safetensors:  59%|█████▊    | 1.74GB / 2.97GB            [A[AProcessing Files (0 / 1)      :  59%|█████▊    | 1.74GB / 2.97GB,  162MB/s  
+
+  ...t/model/model.safetensors:  68%|██████▊   | 2.02GB / 2.97GB            [A[AProcessing Files (0 / 1)      :  68%|██████▊   | 2.02GB / 2.97GB,  184MB/s  
+
+  ...t/model/model.safetensors:  77%|███████▋  | 2.28GB / 2.97GB            [A[AProcessing Files (0 / 1)      :  77%|███████▋  | 2.28GB / 2.97GB,  204MB/s  
+
+  ...t/model/model.safetensors:  86%|████████▌ | 2.55GB / 2.97GB            [A[AProcessing Files (0 / 1)      :  86%|████████▌ | 2.55GB / 2.97GB,  225MB/s  
+
+  ...t/model/model.safetensors:  95%|█████████▍| 2.81GB / 2.97GB            [A[AProcessing Files (0 / 1)      :  95%|█████████▍| 2.81GB / 2.97GB,  244MB/s  
+
+  ...t/model/model.safetensors: 100%|█████████▉| 2.97GB / 2.97GB            [A[AProcessing Files (0 / 1)      : 100%|█████████▉| 2.97GB / 2.97GB,  253MB/s  
+
+  ...t/model/model.safetensors: 100%|██████████| 2.97GB / 2.97GB            [A[AProcessing Files (1 / 1)      : 100%|██████████| 2.97GB / 2.97GB,  236MB/s  
+New Data Upload               : 100%|██████████|  239kB /  239kB, 21.9kB/s  [AProcessing Files (1 / 1)      : 100%|██████████| 2.97GB / 2.97GB,  236MB/s  
+New Data Upload               : 100%|██████████|  239kB /  239kB, 21.9kB/s  
+  ...t/model/model.safetensors: 100%|██████████| 2.97GB / 2.97GB            
+2026-06-07 02:19:04,725 [INFO] httpx: HTTP Request: POST https://huggingface.co/api/models/chankhavu/olmo_1b_bf16_fulltest_final_20260607021856/commit/main "HTTP/1.1 200 OK"
+2026-06-07 02:19:04,725 [INFO] fields.upload: HuggingFace upload complete -> models/chankhavu/olmo_1b_bf16_fulltest_final_20260607021856
+2026-06-07 02:19:04,725 [INFO] fields.upload: wrote upload marker -> /tmp/olmo-sft/output/internal/checkpoints/fields/olmo-sft/olmo3-1b-sft-bf16-fulltest/step10/upload_successful.txt
+2026-06-07 02:19:04,992 [INFO] fields.train: DONE in 2.1 min | uploaded | distcp under /tmp/olmo-sft/output/internal

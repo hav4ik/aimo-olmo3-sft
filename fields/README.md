@@ -21,7 +21,7 @@ The container writes everything — HF cache, base-model + dataset downloads, ch
 
 ### 1. Train (this is all you need to do, nothing more)
 
-Run the experiment with the provided container `olmo-sft-v2-allsm.sif`. `/app/train.py` is the container's default entrypoint, so **`singularity run`** passes the flags straight to it (no `python /app/train.py` needed).
+Run the experiment with the provided container `olmo-sft-v2.1-allsm.sif`. `/app/train.py` is the container's default entrypoint, so **`singularity run`** passes the flags straight to it (no `python /app/train.py` needed).
 
 ```bash
 singularity run --nv --containall \
@@ -29,7 +29,7 @@ singularity run --nv --containall \
   --home "$PWD:/home/guest" \
   --pwd /home/guest \
   --env OTHER_ENV_VARIABLES=... \
-  olmo-sft-v2-allsm.sif \
+  olmo-sft-v2.1-allsm.sif \
   --experiment olmo_7b_fp8 \
   --run-suffix niicluster \
   --olmo-ac-budget 0.8 \
@@ -53,7 +53,7 @@ singularity exec --nv --containall \
   --home "$PWD:/home/guest" \
   --pwd /home/guest \
   --env OTHER_ENV_VARIABLES=... \
-  olmo-sft-v2-allsm.sif \
+  olmo-sft-v2.1-allsm.sif \
   python /app/upload.py
 ```
 
@@ -84,7 +84,7 @@ singularity run --nv --containall \
   --home "$PWD:/home/guest" \
   --pwd /home/guest \
   --env OTHER_ENV_VARIABLES=... \
-  olmo-sft-v2-allsm.sif \
+  olmo-sft-v2.1-allsm.sif \
   --experiment olmo_7b_fp8 \
   --max-tokens-per-rank 32768 \
   --olmo-ac-budget 0.8 \
@@ -121,7 +121,7 @@ A few engineering details, for the curious.
 ## Links
 
 - SFT dataset: [chankhavu/smolmo-proofs-cot-sft](https://huggingface.co/datasets/chankhavu/smolmo-proofs-cot-sft)
-- Container Definition: [olmo-sft-v2-allsm.def](https://github.com/hav4ik/aimo-olmo3-sft/blob/olmo-sft-32b/fields/olmo-sft-v2-allsm.def)
+- Container Definition: [olmo-sft-v2.1-allsm.def](https://github.com/hav4ik/aimo-olmo3-sft/blob/olmo-sft-32b/fields/olmo-sft-v2.1-allsm.def)
 - Base Dockerfile: [Dockerfile](https://github.com/hav4ik/aimo-olmo3-sft/blob/olmo-sft-32b/fields/Dockerfile)
 - Recipes: [RECIPES.md](https://github.com/hav4ik/aimo-olmo3-sft/blob/olmo-sft-32b/RECIPES.md)
 
@@ -139,7 +139,7 @@ singularity run --nv --containall \
   --home "$PWD:/home/guest" \
   --pwd /home/guest \
   --env OTHER_ENV_VARIABLES=... \
-  olmo-sft-v2-allsm.sif \
+  olmo-sft-v2.1-allsm.sif \
   --experiment olmo_7b_fp8 \
   --olmo-ac-budget 0.8 \
   --no-remote-shell

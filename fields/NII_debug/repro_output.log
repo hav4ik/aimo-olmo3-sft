@@ -1,0 +1,52 @@
+############################################################################
+# Local reproduction of NII run_01 crash, inside olmo-sft-v2-allsm.sif
+# Captured: 2026-06-07 13:43:44 JST on Iva
+# GPU: NVIDIA GeForce RTX 3090
+############################################################################
+
+### Step 1 — clean container ships no nvcc of its own:
+    (without the bind) nvcc would be: NONE
+
+### Step 2 — a NON-executable nvcc is now on PATH (bound in, mimics host):
+    nvcc resolves to: /usr/local/bin/nvcc
+    -rw-r--r-- 1 vu vu 32 Jun  6 21:41 /usr/local/bin/nvcc
+
+### Step 3 — torch.compile triggers the version probe and crashes:
+------------------------------------------------------------------ full traceback:
+Traceback (most recent call last):
+  File "<stdin>", line 5, in <module>
+  File "/opt/conda/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 967, in compile_wrapper
+    raise e.remove_dynamo_frames() from None  # see TORCHDYNAMO_VERBOSE=1
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 1019, in _compile_fx_inner
+    raise InductorError(e, currentframe()).with_traceback(
+  File "/opt/conda/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 1003, in _compile_fx_inner
+    mb_compiled_graph = fx_codegen_and_compile(
+                        ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 1766, in fx_codegen_and_compile
+    return scheme.codegen_and_compile(gm, example_inputs, inputs_to_check, graph_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 1241, in codegen_and_compile
+    torch._dynamo.repro.after_aot.save_graph_repro(
+  File "/opt/conda/lib/python3.12/site-packages/torch/_dynamo/repro/after_aot.py", line 541, in save_graph_repro
+    generate_compiler_repro_string(
+  File "/opt/conda/lib/python3.12/site-packages/torch/_dynamo/repro/after_aot.py", line 378, in generate_compiler_repro_string
+    model_str += _cuda_system_info_comment()
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/site-packages/torch/_dynamo/debug_utils.py", line 265, in _cuda_system_info_comment
+    cuda_version_out = subprocess.check_output(["nvcc", "--version"])
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/subprocess.py", line 466, in check_output
+    return run(*popenargs, stdout=PIPE, timeout=timeout, check=True,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/subprocess.py", line 548, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/subprocess.py", line 1026, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+  File "/opt/conda/lib/python3.12/subprocess.py", line 1955, in _execute_child
+    raise child_exception_type(errno_num, err_msg, err_filename)
+torch._inductor.exc.InductorError: PermissionError: [Errno 13] Permission denied: 'nvcc'
+
+Set TORCHDYNAMO_VERBOSE=1 for the internal stack trace (please do this especially if you're reporting a bug to PyTorch). For even more developer context, set TORCH_LOGS="+dynamo"
+
