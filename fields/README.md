@@ -106,6 +106,18 @@ Uploads still run automatically. If you relocated the output and need the manual
 
 **Expected outcome:** parity with **QED-Nano-SFT**, which was trained on similar data (our dataset is 70 times larger).
 
+## Under the hood
+
+A few engineering details, for the curious.
+
+**Parallelism.** Each step shards across the 8 GPUs with **FSDP2 / HSDP** (model + optimizer state sharded within the node) and splits the 65,536-token sequence with **ring context parallelism** — at FP8 that's `cp_degree=2`, i.e. 32,768 tokens/rank. Activation checkpointing (`--olmo-ac-budget`) trades recompute for the VRAM headroom that lets the long sequence fit.
+
+**FlashAttention-2, not FA3.** Ring context parallelism is implemented only on the **FA2** backend (via `ring-flash-attn`); **FlashAttention-3 raises *"doesn't support ring context parallelism."*** So even on the H200 — where FA3's Hopper kernels would otherwise be faster — the run uses **FA2**. The alternative, **Ulysses** all-to-all sequence parallelism (more PCIe-friendly), is opt-in and currently disabled: it tripped a device-side out-of-bounds index — Ulysses hands the **full-sequence** document boundaries (`cu_doc_lens`, used for masking) to the attention kernel while the tensor is already sequence-sharded across the CP ranks, so the index runs off the end of the shard. Until that's debugged we stay on ring + FA2.
+
+**Long-context sequence packing.** The data is **pre-packed** into fixed **65,536-token** sequences — the model's full YaRN context (8,192 base × 8). The **302K** examples (avg **~20K** tokens, median ~15.5K) are concatenated end-to-end into **~92.8K** packed sequences at **≈100% fill** — essentially zero padding, versus only **~31%** useful tokens if you naively padded one example per 65,536-token sequence (a **~3.3× saving** in real tokens per step). Each document's boundary (EOS) is recorded so the varlen attention kernel applies **intra-document masking** (`cu_doc_lens`): every example attends only within itself, never across a packed boundary. (Of the packed tokens, **~92.5% are supervised**; the rest are masked prompt context.) That's what makes 64K-context training on real, variable-length reasoning traces efficient.
+
+**Liger fused-linear cross-entropy — and a z-loss bug we patched.** The container ships [liger-kernel](https://github.com/linkedin/Liger-Kernel); olmo-core can route the LM head through Liger's **fused-linear-cross-entropy** Triton kernel — no materialized `(T, vocab)` logits, ~10 GB saved at 64K context — opt-in via `OLMO_FUSED_LCE`. Wiring it up surfaced a real bug in olmo-core's wrapper: it forwarded `z_loss_multiplier` into Liger's `lse_square_scale` slot **unconditionally**, and since the call sites default that to `1e-4` and Liger adds `lse_square_scale·lse²` to the loss+grad whenever it's nonzero — *independent* of whether z-loss is requested — the fused path silently optimized `CE + 1e-4·lse²` **even with z-loss off**, ~6.5% higher reported loss than the materialized path. Our fork gates it (`z_loss_multiplier if compute_z_loss else 0.0`). This run keeps z-loss **off** and uses the materialized CE reference (so it's unaffected), but the fix makes the fused kernel safe to enable for the 32B.
+
 ## Links
 
 - SFT dataset: [chankhavu/smolmo-proofs-cot-sft](https://huggingface.co/datasets/chankhavu/smolmo-proofs-cot-sft)

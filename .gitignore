@@ -11,4 +11,5 @@ output/
 *.sif
 
 # Presigned S3 URLs to the creds-baked .sif — secret, never commit
-presigned_*.txt
+# Broad match: any name containing "presigned" (e.g. presigned_*.txt, *-presigned.txt).
+*presigned*
