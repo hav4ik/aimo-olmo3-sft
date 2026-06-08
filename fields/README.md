@@ -23,12 +23,14 @@ The container writes everything — HF cache, base-model + dataset downloads, ch
 
 Run the experiment with the provided container `olmo-sft-v2.1-allsm.sif`. `/app/train.py` is the container's default entrypoint, so **`singularity run`** passes the flags straight to it (no `python /app/train.py` needed).
 
+> **Required topology vars.** The container needs four env vars set **explicitly** — `WORLD_SIZE` (number of nodes), `GLOBAL_RANK` (this node's 0-based index), `MASTER_ADDR`, `MASTER_PORT`. It never infers them, and under `--containall` the host env is **not** inherited, so pass them via `--env` (or `APPTAINERENV_*`). The single-node values are shown below; for a multi-node job see **[MULTINODE.md](../MULTINODE.md)** (the node count must be a power of two — 2 or 4 nodes, not 3).
+
 ```bash
 singularity run --nv --containall \
   --bind /host/scratch:/tmp \
   --home "$PWD:/home/guest" \
   --pwd /home/guest \
-  --env OTHER_ENV_VARIABLES=... \
+  --env WORLD_SIZE=1,GLOBAL_RANK=0,MASTER_ADDR=127.0.0.1,MASTER_PORT=29400 \
   olmo-sft-v2.1-allsm.sif \
   --experiment olmo_7b_fp8 \
   --run-suffix niicluster \
@@ -83,7 +85,7 @@ singularity run --nv --containall \
   --bind /host/smolmo-proofs-cot-sft:/mnt/data:ro \
   --home "$PWD:/home/guest" \
   --pwd /home/guest \
-  --env OTHER_ENV_VARIABLES=... \
+  --env WORLD_SIZE=1,GLOBAL_RANK=0,MASTER_ADDR=127.0.0.1,MASTER_PORT=29400 \
   olmo-sft-v2.1-allsm.sif \
   --experiment olmo_7b_fp8 \
   --max-tokens-per-rank 32768 \
@@ -138,7 +140,7 @@ singularity run --nv --containall \
   --bind /host/scratch:/tmp \
   --home "$PWD:/home/guest" \
   --pwd /home/guest \
-  --env OTHER_ENV_VARIABLES=... \
+  --env WORLD_SIZE=1,GLOBAL_RANK=0,MASTER_ADDR=127.0.0.1,MASTER_PORT=29400 \
   olmo-sft-v2.1-allsm.sif \
   --experiment olmo_7b_fp8 \
   --olmo-ac-budget 0.8 \

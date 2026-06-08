@@ -1,84 +1,88 @@
-# Multi-node launch (ABCI / NII Singularity) — interface & example
+# Multi-node launch (NII / ABCI Singularity) — the launch contract
 
-This is the launch contract for the deploy images on the ABCI cluster (compute node **H**: 8× H200
-141 GB, 2 TB RAM, 96 cores; CUDA 13.0, driver 580.105.08). One **Singularity/Apptainer container per
-node**; the container wraps `torchrun` and spawns **one rank per local GPU** itself — the scheduler
-only deals with node-level placement.
+The deploy image **`olmo-sft-v2.1-allsm.sif`** (entrypoint `python /app/train.py`) runs **one
+Singularity/Apptainer container per node**. The container wraps `torchrun` and spawns **one rank per
+local GPU** itself — your scheduler only places one container per node and tells it the node-level
+topology. Compute node: 8× H200 141 GB, CUDA 13.0, driver 580.
 
-## What the container does for you
-- Wraps `torchrun` (olmocore) / `accelerate launch` (axolotl). You do **not** launch torchrun.
-- Auto-detects local GPUs → `--nproc_per_node` (override with `NPROC_PER_NODE`). torchrun assigns
-  each rank's `RANK` / `LOCAL_RANK` / `WORLD_SIZE`. "Local rank" is handled inside, as requested.
-- The nvrtc/TE fix is **baked into the image**; the **code is cloned at startup into
-  `/data/training/code`** (the writable run-storage bind), so it runs on a **read-only** squashfs
-  with no `--writable-tmpfs` needed. Pin the exact code with `CODE_REF=<branch|tag|commit>` — the
-  resolved SHA is logged at startup. Multi-node: node-rank 0 stages the clone, others reuse it.
-- For OLMo-core, the one-time HF→distcp checkpoint conversion runs automatically on first use; in a
-  multi-node job only node-rank 0 converts and the others wait on a sentinel on the shared storage.
-
-## Environment the container reads
-Your PBS script sets these per node (the container maps them to a **static** torchrun rendezvous):
+## The contract — all four vars are REQUIRED (no inference)
+The launcher MUST set **all four** of these in the **container's** environment. The container does
+**not** guess topology — if any is missing it **exits immediately** with an error, rather than
+silently running as an isolated single-node job (the failure mode we hit on the cluster: each node
+trained and uploaded its own checkpoint, all colliding on one W&B run). The convention is fixed:
 
 | Var | Meaning | Maps to |
 |---|---|---|
-| `MASTER_ADDR` | rendezvous host (rank-0 node) | `torchrun --master_addr` |
-| `MASTER_PORT` | rendezvous port (default 29400) | `torchrun --master_port` |
-| `WORLD_SIZE` | total ranks (standard torchrun) **or** #nodes — auto-detected | `torchrun --nnodes` |
-| `GLOBAL_RANK` | this node's base global rank **or** node index — auto-detected | `torchrun --node_rank` |
+| `WORLD_SIZE` | **number of NODES** | `torchrun --nnodes` |
+| `GLOBAL_RANK` | **this node's index, 0-based** (`0 … WORLD_SIZE-1`) | `torchrun --node_rank` |
+| `MASTER_ADDR` | rendezvous host = node 0's address, reachable from every node | `torchrun --master_addr` |
+| `MASTER_PORT` | rendezvous port (a free TCP port) | `torchrun --master_port` |
 
-> **Both conventions are handled automatically.** The container knows its local GPU count, so it
-> disambiguates: if `WORLD_SIZE` is a clean multiple of the local GPU count it's treated as
-> process-level (standard torchrun: `nnodes = WORLD_SIZE / gpus_per_node`,
-> `node_rank = GLOBAL_RANK / gpus_per_node`); otherwise as node-level. Either way you can force it
-> with `NNODES` / `NODE_RANK`. The container logs the resolved `node R/N` and the exact `torchrun`
-> line at startup, so the topology is visible before any rendezvous.
+torchrun then assigns each worker's real `RANK` / `LOCAL_RANK` / `WORLD_SIZE` (the process world =
+`WORLD_SIZE_nodes × 8`). At startup the container logs `dist contract OK: N node(s) × 8 GPU =
+world_size W …` and `[olmocore] … {N}x8 … node {K}/{N}` — check those two lines to confirm the
+topology before training.
 
-Run-selection + secrets (via `APPTAINERENV_*` / `SINGULARITYENV_*` or `--env`):
+## Two hard requirements
+1. **Node count must be a power of two** (1, 2, 4, 8 …). olmo-core requires a power-of-two
+   `world_size = nodes × 8`; since 8 = 2³, the **node count itself** must be a power of two.
+   **3 nodes is rejected** (24 is not a power of two) — the container fails fast with that message.
+   For the 7B fp8 production shape, use **2 or 4 nodes**.
+2. **`--workdir` and the output path must be on shared storage** across all nodes: node 0 downloads +
+   converts the base model while the others wait on a sentinel file, and all ranks write distcp
+   checkpoint shards into one shared save folder. A non-shared FS makes the waiters time out (~2 h)
+   and the job hang at rendezvous.
 
-| Var | Meaning |
-|---|---|
-| `FRAMEWORK` | `olmocore` \| `axolotl` |
-| `PRECISION` | `bf16` (default) \| `fp8` |
-| `MODEL_SIZE` | axolotl only: `7b` \| `32b` |
-| `DATASET_NAME` | prepped dataset under `/data/training/datasets/<NAME>/` |
-| `HF_TOKEN` | HuggingFace token (gated base model download) |
-| `WANDB_API_KEY` | enables W&B logging (incl. the FP8 `optim/step skipped` metric); unset ⇒ offline |
-| `CODE_REF` | pin the code: branch, tag, or commit SHA (default branch `olmo3-sft`) — resolved SHA is logged |
-
-## Build the SIF
-```bash
-# from a pushed image (recommended), or docker-daemon:// for a local one
-apptainer build olmo3-olmocore.sif docker://chankhavu/olmo3-olmocore:cu130
-```
-
-## Example: 3-node × 8×H200 run (PBS sketch)
-The container is identical on every node; only `GLOBAL_RANK` differs. `MASTER_ADDR/PORT/WORLD_SIZE`
-are set by your PBS scaffolding.
+## Forwarding the vars across `--containall`
+The documented launch uses `--containall`, which **does not inherit the host environment** — host
+vars set by PBS do **not** cross into the container unless forwarded. Do one of:
 
 ```bash
-# --- per-node invocation (your PBS wrapper runs this on each of the 3 nodes) ---
-apptainer exec --nv \
-  --bind /path/to/run_storage:/data/training \
-  --env FRAMEWORK=olmocore,PRECISION=bf16,DATASET_NAME=mymath \
-  --env HF_TOKEN="$HF_TOKEN",WANDB_API_KEY="$WANDB_API_KEY" \
-  olmo3-olmocore.sif
-# MASTER_ADDR / MASTER_PORT / WORLD_SIZE / GLOBAL_RANK come from the PBS environment.
-# -> container runs: torchrun --nnodes=$WORLD_SIZE --node_rank=$GLOBAL_RANK \
-#      --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT --nproc_per_node=8 <sft script> ...
-```
-Full recipe defaults (seq 32768 / 1,048,576 tok / 2 epochs) apply when no smoke overrides are set.
-For 32B use the axolotl image with `--env MODEL_SIZE=32b` (it maps the same env to
-`accelerate launch --num_machines/--machine_rank/--main_process_ip/--main_process_port`).
+# (a) --env on the singularity command:
+singularity run --nv --containall \
+  --env WORLD_SIZE=$WORLD_SIZE,GLOBAL_RANK=$GLOBAL_RANK,MASTER_ADDR=$MASTER_ADDR,MASTER_PORT=$MASTER_PORT \
+  ...
 
-## Data + checkpoints (shared 1 TB storage, bound to `/data/training`)
-- `datasets/<NAME>/` — prepped offline beforehand (see `DATA.md`); read-only at train time.
-- `checkpoints/` — written here (the only writable path the run needs besides `/tmp`).
-- `hf_cache/`, `wandb/` — created automatically.
-All three nodes bind the **same** shared storage so the convert sentinel and checkpoints are visible
-cluster-wide.
+# (b) or APPTAINERENV_/SINGULARITYENV_ exports before the run:
+export APPTAINERENV_WORLD_SIZE=$WORLD_SIZE APPTAINERENV_GLOBAL_RANK=$GLOBAL_RANK
+export APPTAINERENV_MASTER_ADDR=$MASTER_ADDR APPTAINERENV_MASTER_PORT=$MASTER_PORT
+```
+
+Quick check that they actually crossed the boundary:
+```bash
+singularity exec --nv --containall <your binds> olmo-sft-v2.1-allsm.sif \
+  env | grep -E 'WORLD_SIZE|GLOBAL_RANK|MASTER_ADDR|MASTER_PORT'
+```
+
+## Example: 4-node × 8×H200 (PBS sketch)
+Identical container on every node; only `GLOBAL_RANK` differs.
+```bash
+# per-node, run by your PBS wrapper on each of the 4 nodes:
+export APPTAINERENV_WORLD_SIZE=4                 # number of NODES (power of two)
+export APPTAINERENV_GLOBAL_RANK="$NODE_INDEX"    # 0, 1, 2, 3
+export APPTAINERENV_MASTER_ADDR="$HEAD_NODE"     # node 0's address, reachable from all nodes
+export APPTAINERENV_MASTER_PORT=29400
+singularity run --nv --containall \
+  --bind /shared/run_storage:/tmp \
+  --home "$PWD:/home/guest" --pwd /home/guest \
+  olmo-sft-v2.1-allsm.sif \
+  --experiment olmo_7b_fp8 --olmo-ac-budget 0.8 --run-suffix niicluster --no-remote-shell
+# -> each node runs:
+#    torchrun --nnodes=4 --node_rank=$GLOBAL_RANK --master_addr=$MASTER_ADDR \
+#             --master_port=$MASTER_PORT --nproc_per_node=8 <sft script> ...   (one 32-rank job)
+```
+
+## Single node
+A single-node run uses the **same** contract — set `WORLD_SIZE=1 GLOBAL_RANK=0 MASTER_ADDR=127.0.0.1
+MASTER_PORT=29400`. (Running several single-node jobs on one box? Give each a distinct `MASTER_PORT`.)
+
+## Data + checkpoints (shared storage, bound at `--workdir`/output)
+- node 0 stages the base-model HF→distcp convert + dataset download; nodes 1+ wait on a sentinel.
+- all ranks write distcp checkpoint shards into the one shared save folder.
+- the per-node Triton/inductor compile cache is namespaced by hostname, so each node compiles once
+  (no cross-node cache races).
 
 ## Versions in the image
-- torch **2.10.0+cu130**, CUDA **13.0** (matches the cluster).
-- NCCL **2.28.9** (newer than the recommended 2.23.x; compatible with driver 580 / CUDA 13). If NCCL
-  issues appear on the fabric, set `NCCL_*` tuning via `--env` (e.g. `NCCL_DEBUG=INFO`).
-- Attention auto-selects `flash_3` (FA3) on H200 (sm_90).
+- torch **2.10.0+cu130**, CUDA **13.0** (matches the cluster), NCCL **2.28.9**.
+- Attention auto-selects flash on H200 (sm_90). If fabric NCCL issues appear, pass `NCCL_DEBUG=INFO`
+  (and any `NCCL_*` tuning) via `--env`.

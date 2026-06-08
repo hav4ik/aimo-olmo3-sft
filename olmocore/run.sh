@@ -30,6 +30,16 @@ fi
 
 DATA="${DATA:-/data/training}"   # overridable: Fields train.py points this at --workdir (downloads/scratch)
 NPROC="${NPROC_PER_NODE:-$(nvidia-smi -L | wc -l)}"
+
+# ---- Distributed contract: the launcher MUST set all four; we never infer topology ------------
+# WORLD_SIZE = number of NODES, GLOBAL_RANK = this node's 0-based index, MASTER_ADDR/MASTER_PORT =
+# rendezvous. Single node: WORLD_SIZE=1 GLOBAL_RANK=0 MASTER_ADDR=127.0.0.1 MASTER_PORT=29400.
+# Fields train.py validates these first (friendlier message); this also guards the direct /
+# entrypoint.sh path so a missing var fails LOUD here instead of silently running standalone.
+: "${WORLD_SIZE:?[olmocore] not set — launcher must set WORLD_SIZE(#nodes) GLOBAL_RANK(node-index) MASTER_ADDR MASTER_PORT. Single node: WORLD_SIZE=1 GLOBAL_RANK=0 MASTER_ADDR=127.0.0.1 MASTER_PORT=29400. Under singularity --containall forward via --env / APPTAINERENV_*}"
+: "${GLOBAL_RANK:?[olmocore] not set — this node's 0-based index in [0, WORLD_SIZE)}"
+: "${MASTER_ADDR:?[olmocore] not set — rendezvous host (node 0's address)}"
+: "${MASTER_PORT:?[olmocore] not set — rendezvous port}"
 # Model + recipe by size (the EXPERIMENT/MODEL_SIZE front-end sets MODEL_SIZE; explicit env wins).
 MODEL_SIZE="${MODEL_SIZE:-7b}"
 # DEF_KEEP = default cap on persistent checkpoints kept on disk (distcp ~100 GB/7B, ~450 GB/32B vs
@@ -54,9 +64,9 @@ export OLMO_KEEP_LAST_CKPTS="${OLMO_KEEP_LAST_CKPTS:-$DEF_KEEP}"
 CKPT="${CKPT:-$DATA/checkpoints/olmocore-olmo3-${MODEL_SIZE}-think/model_and_optim}"
 CKPT_DIR="$(dirname "$CKPT")"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # this script's dir (cloned or baked)
-# Staging node for one-time rank-0 work (convert + data prep) on the shared storage. node 0 has
-# rank 0 in BOTH conventions (node-level GLOBAL_RANK=0, or process-level base rank 0).
-THIS_NODE_RANK="${NODE_RANK:-${GLOBAL_RANK:-0}}"
+# Staging node for one-time rank-0 work (convert + data prep) on the shared storage. GLOBAL_RANK is
+# this node's index per the explicit contract above; node 0 (GLOBAL_RANK=0) stages, the rest wait.
+THIS_NODE_RANK="$GLOBAL_RANK"
 
 # Retry a (resumable) download with exponential backoff. huggingface_hub already retries individual
 # files/chunks on 429/5xx + resumes from cache; this wraps the WHOLE `hf download` so a sustained
@@ -217,37 +227,20 @@ DUR_UNIT="${DUR_UNIT:-epochs}"; DUR_VAL="${EPOCHS:-2}"
 EXTRA=()
 [ -n "${RANK_MICROBATCH_TOKENS:-}" ] && EXTRA+=("--train_module.rank_microbatch_size=$RANK_MICROBATCH_TOKENS")
 
-# ---- Multi-node launch ------------------------------------------------------------------------
-# The container owns the whole node and torchrun spawns one rank per local GPU (--nproc_per_node);
-# torchrun sets each rank's RANK/LOCAL_RANK/WORLD_SIZE. Node topology, in priority order:
-#   1. ABCI/PBS env (MASTER_ADDR + MASTER_PORT + WORLD_SIZE + GLOBAL_RANK) -> static torchrun.
-#      ASSUMPTION: WORLD_SIZE = number of NODES, GLOBAL_RANK = this node's rank (0-indexed) — the
-#      "one container per node, local rank handled inside" model. If your scheduler sets these as
-#      process-level counts instead, pass NNODES/NODE_RANK explicitly (they take precedence).
-#   2. NNODES>1 + HEAD_NODE_IP -> c10d rendezvous (our Vast.AI multi-node path).
-#   3. single node -> standalone.
-# Resolve node topology from the scheduler env. Handles BOTH conventions, auto-detected by whether
-# WORLD_SIZE is a clean multiple of the local GPU count ($NPROC):
-#   - process-level (standard torchrun): WORLD_SIZE = total ranks, GLOBAL_RANK = this node's base rank
-#   - node-level:                        WORLD_SIZE = #nodes,      GLOBAL_RANK = node index
-# Override either with NNODES / NODE_RANK.
-if [ -n "${NNODES:-}" ]; then
-    NODE_RANK="${NODE_RANK:-${GLOBAL_RANK:-0}}"
-elif [ -n "${WORLD_SIZE:-}" ] && [ "$WORLD_SIZE" -gt "$NPROC" ] && [ $((WORLD_SIZE % NPROC)) -eq 0 ]; then
-    NNODES=$((WORLD_SIZE / NPROC)); NODE_RANK="${NODE_RANK:-$(( ${GLOBAL_RANK:-0} / NPROC ))}"
-else
-    NNODES="${WORLD_SIZE:-1}"; NODE_RANK="${NODE_RANK:-${GLOBAL_RANK:-0}}"
-fi
-if [ -n "${MASTER_ADDR:-}" ] && [ "$NNODES" -gt 1 ]; then
-    RDZV=(--nnodes="$NNODES" --node_rank="$NODE_RANK"
-          --master_addr="$MASTER_ADDR" --master_port="${MASTER_PORT:-29400}")
-elif [ "$NNODES" -gt 1 ]; then
-    RDZV=(--nnodes="$NNODES" --node_rank="$NODE_RANK" --rdzv_id="$RUN_NAME"
-          --rdzv_backend=c10d --rdzv_endpoint="${HEAD_NODE_IP:-127.0.0.1}:${NCCL_PORT:-29400}")
-else
-    RDZV=(--standalone --nnodes=1)
-fi
-# torchrun assigns the children's ranks; drop inherited process-level vars so they can't shadow it.
+# ---- Multi-node launch (explicit contract; no inference) --------------------------------------
+# Topology comes ONLY from the launcher's WORLD_SIZE (= number of NODES) and GLOBAL_RANK (= this
+# node's 0-based index); both are required and already guarded at the top of this script (and, on the
+# Fields path, validated in train.py). We do NOT auto-detect a process-level convention and there is
+# NO standalone / localhost fallback — a misconfigured launch fails loud rather than fanning out into
+# independent single-node jobs. torchrun spawns one rank per local GPU (--nproc_per_node) and assigns
+# each child's RANK/LOCAL_RANK/WORLD_SIZE (the real process world_size = WORLD_SIZE_nodes x NPROC).
+# A single-node run is just WORLD_SIZE=1/GLOBAL_RANK=0 with the node's own MASTER_ADDR.
+NNODES="$WORLD_SIZE"
+NODE_RANK="$GLOBAL_RANK"
+RDZV=(--nnodes="$NNODES" --node_rank="$NODE_RANK"
+      --master_addr="$MASTER_ADDR" --master_port="$MASTER_PORT")
+# torchrun assigns the children's ranks; drop the inherited node-level vars so they can't shadow the
+# process-level RANK/WORLD_SIZE torchrun sets for each worker.
 unset RANK WORLD_SIZE GLOBAL_RANK LOCAL_RANK 2>/dev/null || true
 
 echo "[olmocore] $PRECISION | ${NNODES}x${NPROC} GPU cc=$GPU_CC | attn=$OLMO_ATTN_BACKEND | cp=${OLMO_CP_STYLE:-ring} | ac=${OLMO_AC_BUDGET:-selected_ffn} | fp8=${OLMO_FP8:-off}${OLMO_FP8_FSDP_ALLGATHER:+/ag} | optim=$OLMO_OPTIM | ckpt=${OLMO_SAVE_INTERVAL:-1000}/${OLMO_EPHEMERAL_INTERVAL:-500}/keep${OLMO_KEEP_LAST_CKPTS} | node ${NODE_RANK}/${NNODES} | $DUR_VAL $DUR_UNIT"

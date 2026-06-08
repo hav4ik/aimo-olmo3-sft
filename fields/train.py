@@ -450,7 +450,12 @@ def open_setup_wandb(args: argparse.Namespace, recipe: Recipe, final_name: str, 
     if not is_node_zero() or not os.environ.get("WANDB_API_KEY"):
         return None
     run_id = wandb_run_id(final_name)
-    project = os.environ.setdefault("WANDB_PROJECT", "olmo3-7b-sft")  # match olmo-core's default
+    # Per-size default W&B project (1b is an OLMo-2 model; 7b/32b are OLMo-3). An explicit
+    # WANDB_PROJECT still wins (setdefault). This is inherited by run.sh -> the rank-0 worker, so it
+    # overrides each SFT script's own WandBCallback project default — keep them consistent with this map.
+    _default_project = {"1b": "olmo2-1b-sft", "7b": "olmo3-7b-sft", "32b": "olmo3-32b-sft"}.get(
+        recipe.model_size, f"olmo3-{recipe.model_size}-sft")
+    project = os.environ.setdefault("WANDB_PROJECT", _default_project)
     os.environ["WANDB_RUN_ID"] = run_id      # inherited by run.sh -> torchrun -> the rank-0 worker
     os.environ["WANDB_RESUME"] = "allow"
     try:
@@ -562,6 +567,52 @@ def launch_remote_shell(workdir: Path, relay_space: str, logdir: Path) -> None:
         log.warning("remote shell: launch skipped (%s); continuing without it", exc)
 
 
+def require_dist_env(gpus_per_node: int) -> None:
+    """Hard contract: the launcher MUST set all four distributed env vars explicitly — we never infer
+    topology. (A wrong/absent guess silently fans a multi-node job out into N independent single-node
+    runs: each node downloads, trains and uploads its own checkpoint, and the deterministic W&B run-id
+    makes them collide on one run. That is exactly the failure we hit on the NII cluster.) Convention:
+    WORLD_SIZE = number of NODES, GLOBAL_RANK = this node's 0-based index, MASTER_ADDR / MASTER_PORT =
+    the rendezvous. Single node: WORLD_SIZE=1 GLOBAL_RANK=0 MASTER_ADDR=127.0.0.1 MASTER_PORT=29400.
+    Under `singularity --containall` the host env is NOT inherited — forward them with --env or
+    APPTAINERENV_* / SINGULARITYENV_*."""
+    req = ("WORLD_SIZE", "GLOBAL_RANK", "MASTER_ADDR", "MASTER_PORT")
+    vals = {k: os.environ.get(k, "").strip() for k in req}
+    missing = [k for k, v in vals.items() if not v]
+    if missing:
+        raise SystemExit(
+            "FATAL: missing required distributed env var(s): " + ", ".join(missing) + ".\n"
+            "  This container requires ALL of WORLD_SIZE, GLOBAL_RANK, MASTER_ADDR, MASTER_PORT to be\n"
+            "  set explicitly by the launcher — topology is never inferred. Convention:\n"
+            "    WORLD_SIZE = number of NODES,  GLOBAL_RANK = this node's index (0-based).\n"
+            "  Single node: WORLD_SIZE=1 GLOBAL_RANK=0 MASTER_ADDR=127.0.0.1 MASTER_PORT=29400.\n"
+            "  Under `singularity --containall` the host env is NOT inherited — forward them with\n"
+            "  --env or APPTAINERENV_* / SINGULARITYENV_*.")
+    try:
+        nnodes, node_rank, port = (int(vals["WORLD_SIZE"]), int(vals["GLOBAL_RANK"]),
+                                   int(vals["MASTER_PORT"]))
+    except ValueError:
+        raise SystemExit("FATAL: WORLD_SIZE, GLOBAL_RANK and MASTER_PORT must be integers; got "
+                         f"WORLD_SIZE={vals['WORLD_SIZE']!r}, GLOBAL_RANK={vals['GLOBAL_RANK']!r}, "
+                         f"MASTER_PORT={vals['MASTER_PORT']!r}.")
+    if nnodes < 1:
+        raise SystemExit(f"FATAL: WORLD_SIZE (number of nodes) must be >= 1; got {nnodes}.")
+    if not 0 <= node_rank < nnodes:
+        raise SystemExit(f"FATAL: GLOBAL_RANK must be in [0, WORLD_SIZE={nnodes}); got {node_rank}.")
+    if not 1 <= port <= 65535:
+        raise SystemExit(f"FATAL: MASTER_PORT must be in [1, 65535]; got {port}.")
+    # olmo-core's BatchSizeConfig asserts a power-of-two world_size; surface it here (in seconds,
+    # before any download) instead of as a deep assertion mid-launch. world_size = nodes * GPUs/node.
+    world = nnodes * gpus_per_node
+    if world & (world - 1):
+        raise SystemExit(
+            f"FATAL: world_size = {nnodes} node(s) x {gpus_per_node} GPU/node = {world} is not a power "
+            f"of two, which olmo-core requires. With {gpus_per_node} GPU/node the node count must be a "
+            f"power of two (1, 2, 4, 8, ...); {nnodes} is not. Use a power-of-two node count.")
+    log.info("dist contract OK: %d node(s) x %d GPU/node = world_size %d | this node_rank=%d | "
+             "rendezvous %s:%d", nnodes, gpus_per_node, world, node_rank, vals["MASTER_ADDR"], port)
+
+
 # --------------------------------------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------------------------------------
@@ -592,6 +643,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     log.info("Fields Olmo-3 SFT | experiment=%s size=%s precision=%s seq_len=%d",
              args.experiment, recipe.model_size, recipe.precision, seq_len)
     log.info("workdir=%s  output=%s  logdir=%s", workdir, output, logdir)
+
+    # Distributed contract — REQUIRED, validated before any download/training. All four topology vars
+    # must be set by the launcher; we never infer (a wrong/absent guess silently fans out into N
+    # independent single-node jobs). See require_dist_env() for the convention + single-node values.
+    require_dist_env(args.num_gpus or visible_gpus())
 
     # Keep the HF cache under --workdir so it lands in the writable (bound) area. The baked default
     # (BAKED_HF_HOME, under /tmp) is bound on the cluster, but if --workdir points elsewhere we want the
