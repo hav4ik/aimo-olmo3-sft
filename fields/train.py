@@ -454,31 +454,45 @@ def upload_run_logs(logdir: Path, output: Path, dataset_repo: str, step: int, sn
 
 def upload_watcher(output: Path, seq_len: int, interval: float, stop: threading.Event,
                    timeout: float, logdir: Path, dataset_repo: str) -> None:
-    """Background loop (node 0): every `interval`s, (1) ship the run logs to the PRIVATE dataset, and
-    (2) convert+upload the latest unmarked checkpoint — both WHILE training runs, never blocking the GPUs.
-    The checkpoint convert is CPU-only and bounded by `timeout`; the log push is in-process + small.
+    """Background loop (node 0): every `interval`s, (1) convert+upload the latest unmarked checkpoint —
+    the DELIVERABLE, run first so a slow log push can never delay or starve it — then (2) ship the run
+    logs to the PRIVATE dataset, but only when they've actually changed (so we don't spam one dataset
+    commit per poll over a multi-day run). The checkpoint convert is CPU-only and bounded by `timeout`.
     Best-effort: every iteration's errors are logged, never raised (a failed ship must not disturb training)."""
     log.info("upload watcher started (poll every %ds, %.0fmin/ckpt-upload cap; logs -> datasets/%s)",
              int(interval), timeout / 60.0, dataset_repo)
     last_snapshot_step = -1
+    last_log_sig: object = object()  # sentinel: the first computed signature always differs -> first push
     while not stop.wait(interval):  # sleep first (no checkpoint exists at step 0), wake early on stop
         steps = [int(p.name[4:]) for p in output.rglob("step*") if p.name[4:].isdigit()]
         cur_step = max(steps) if steps else 0
-        snapshot = cur_step > 0 and cur_step != last_snapshot_step
-        # (1) logs — every poll, even before the first checkpoint (captures the download/convert/setup phase)
-        upload_run_logs(logdir, output, dataset_repo, cur_step, snapshot)
-        if snapshot:
-            last_snapshot_step = cur_step
-        # (2) checkpoint — only once a dir exists (else upload.py throws a no-checkpoint traceback). A calm
-        # heartbeat in the empty pre-training phase so it doesn't look like a hang or a crash.
+        # (1) checkpoint FIRST — the deliverable. Only once a dir exists (else upload.py throws a
+        # no-checkpoint traceback). A calm heartbeat in the empty pre-training phase so it doesn't look
+        # like a hang or a crash.
         if not steps:
             log.info("upload watcher: no checkpoint under %s yet — waiting (first save lands after "
                      "model/data download + convert)", output)
-            continue
+        else:
+            try:
+                run_upload(output, seq_len, cpu_only=True, quiet=True, timeout=timeout)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("upload watcher iteration failed (%s); retrying next interval", exc)
+        # (2) logs — best-effort, AFTER the deliverable. Push a snapshot when the step advances, and push
+        # `latest/` only when the on-disk logs changed (size/mtime signature) so an idle poll is a no-op
+        # rather than an empty dataset commit. The pre-checkpoint phase is still captured: the logs are
+        # changing then, so the signature differs and we push.
+        snapshot = cur_step > 0 and cur_step != last_snapshot_step
         try:
-            run_upload(output, seq_len, cpu_only=True, quiet=True, timeout=timeout)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("upload watcher iteration failed (%s); retrying next interval", exc)
+            node_root = logdir / "node"
+            sig: object = tuple(sorted((p.name, p.stat().st_size, int(p.stat().st_mtime))
+                                       for p in node_root.glob("*/*.log"))) if node_root.is_dir() else ()
+        except Exception:  # noqa: BLE001  -- stat race on a rotating log -> force a push this round
+            sig = object()
+        if snapshot or sig != last_log_sig:
+            upload_run_logs(logdir, output, dataset_repo, cur_step, snapshot)
+            last_log_sig = sig
+            if snapshot:
+                last_snapshot_step = cur_step
     log.info("upload watcher stopped")
 
 
@@ -658,16 +672,13 @@ def require_dist_env(gpus_per_node: int) -> None:
         raise SystemExit(f"FATAL: GLOBAL_RANK must be in [0, WORLD_SIZE={nnodes}); got {node_rank}.")
     if not 1 <= port <= 65535:
         raise SystemExit(f"FATAL: MASTER_PORT must be in [1, 65535]; got {port}.")
-    # olmo-core's BatchSizeConfig asserts a power-of-two world_size; surface it here (in seconds,
-    # before any download) instead of as a deep assertion mid-launch. world_size = nodes * GPUs/node.
-    world = nnodes * gpus_per_node
-    if world & (world - 1):
-        raise SystemExit(
-            f"FATAL: world_size = {nnodes} node(s) x {gpus_per_node} GPU/node = {world} is not a power "
-            f"of two, which olmo-core requires. With {gpus_per_node} GPU/node the node count must be a "
-            f"power of two (1, 2, 4, 8, ...); {nnodes} is not. Use a power-of-two node count.")
+    # NOTE: world_size is NOT required to be a power of two here. The 32B BatchSizeConfig accepts non-pow2
+    # node counts (e.g. 3 nodes -> world 24, batch 1.5M -> grad_accum 4); the authoritative validity check
+    # — batch divisibility for the 32B, the pow2 assert for the frozen 7B/1B scripts — lives in the SFT
+    # script and fires there with a clear error. This contract only validates the 4 vars are present + sane.
     log.info("dist contract OK: %d node(s) x %d GPU/node = world_size %d | this node_rank=%d | "
-             "rendezvous %s:%d", nnodes, gpus_per_node, world, node_rank, vals["MASTER_ADDR"], port)
+             "rendezvous %s:%d", nnodes, gpus_per_node, nnodes * gpus_per_node, node_rank,
+             vals["MASTER_ADDR"], port)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -858,7 +869,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                  os.environ.get("NODE_RANK", os.environ.get("GLOBAL_RANK", "0")))
 
     if rc != 0:  # surface the training failure (we already best-effort shipped the survivor above)
-        raise RuntimeError(f"run.sh failed (exit {rc}) — see {logdir / 'run.log'}")
+        raise RuntimeError(f"run.sh failed (exit {rc}) — see {node_logdir / 'run.log'}")
     if final_rc != 0:
         log.error("final auto-upload FAILED (exit %d) — checkpoints intact; re-run by hand: "
                   "python /app/upload.py --final --output %s", final_rc, output)
