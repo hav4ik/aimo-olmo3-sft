@@ -356,6 +356,16 @@ def is_node_zero() -> bool:
     return os.environ.get("NODE_RANK", os.environ.get("GLOBAL_RANK", "0")) == "0"
 
 
+def node_id() -> str:
+    """Per-node id for namespacing per-node paths (logs, compile cache, scratch). The node index
+    (GLOBAL_RANK — our validated, always-present contract var) gives a unique, sortable id even if the
+    hostname is empty or duplicated; the hostname is appended so the physical node stays identifiable for
+    debugging (e.g. which node hit a flaky compile). Replaces the bare-hostname scheme (which relied on
+    os.uname().nodename being set)."""
+    rank = os.environ.get("NODE_RANK", os.environ.get("GLOBAL_RANK", "0"))
+    return f"{rank}-{os.uname().nodename or 'node'}"
+
+
 def run_smoke_test(workdir: Path, output: Path, require_hf: bool) -> int:
     """Preflight: run the sibling smoke_test.py (GPUs, torch/CUDA, olmo_core/flash-attn/TE imports, the HF
     converter, writable workdir/output, free disk, and — when require_hf — HF token + hub reachability as
@@ -401,20 +411,59 @@ def run_upload(output: Path, seq_len: int, cpu_only: bool = True, quiet: bool = 
         return 124
 
 
+def upload_run_logs(logdir: Path, output: Path, dataset_repo: str, step: int, snapshot: bool) -> None:
+    """Best-effort (node 0): ship this run's logs to a PRIVATE HF dataset. Always refreshes ``latest/``;
+    on a NEW checkpoint step also writes a ``step<N>-<ts>/`` snapshot. Logs go under ``<hostname>/`` so a
+    multi-node run doesn't collide. FORCED private (logs may carry tokens/paths — must never be public).
+    NEVER raises — a failed log push must not disturb training."""
+    try:
+        import datetime as _dt
+        from huggingface_hub import HfApi
+        token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        if not token:
+            return
+        node_root = logdir / "node"                  # logdir/node/<host>/{train.py,run,remote-shell}.log
+        have_logs = node_root.is_dir() and any(node_root.glob("*/*.log"))
+        manifest = output / "MANIFEST.txt"
+        if not have_logs and not manifest.is_file():
+            return
+        api = HfApi(token=token)
+        api.create_repo(repo_id=dataset_repo, repo_type="dataset", private=True, exist_ok=True)
+        dests = ["latest"]
+        if snapshot:
+            dests.append(f"step{step:08d}-{_dt.datetime.now().strftime('%Y%m%d%H%M%S')}")
+        for dest in dests:
+            if have_logs:  # node 0 sees EVERY node's dir on the shared FS -> ship them all under <host>/
+                api.upload_folder(repo_id=dataset_repo, repo_type="dataset", folder_path=str(node_root),
+                                  path_in_repo=dest, allow_patterns=["*/*.log"])
+            if manifest.is_file():
+                api.upload_file(path_or_fileobj=str(manifest), repo_id=dataset_repo, repo_type="dataset",
+                                path_in_repo=f"{dest}/MANIFEST.txt")
+        log.info("logs -> hf://datasets/%s (%s)", dataset_repo, " + ".join(dests))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("log upload skipped (%s)", exc)
+
+
 def upload_watcher(output: Path, seq_len: int, interval: float, stop: threading.Event,
-                   timeout: float) -> None:
-    """Background loop (node 0): every `interval`s, convert+upload the latest unmarked checkpoint WHILE
-    training runs — so each new checkpoint ships in parallel without blocking the GPUs. Conversion is
-    CPU-only; upload.py skips checkpoints already marked, so this no-ops between checkpoints. Each upload is
-    bounded by `timeout` so a wedged ship can't stall the loop (or the shutdown join). Best-effort: every
-    iteration's errors are logged, never raised (a failed ship must not disturb training)."""
-    log.info("upload watcher started (poll every %ds, %.0fmin/upload cap, CPU-only, ships each new checkpoint)",
-             int(interval), timeout / 60.0)
+                   timeout: float, logdir: Path, dataset_repo: str) -> None:
+    """Background loop (node 0): every `interval`s, (1) ship the run logs to the PRIVATE dataset, and
+    (2) convert+upload the latest unmarked checkpoint — both WHILE training runs, never blocking the GPUs.
+    The checkpoint convert is CPU-only and bounded by `timeout`; the log push is in-process + small.
+    Best-effort: every iteration's errors are logged, never raised (a failed ship must not disturb training)."""
+    log.info("upload watcher started (poll every %ds, %.0fmin/ckpt-upload cap; logs -> datasets/%s)",
+             int(interval), timeout / 60.0, dataset_repo)
+    last_snapshot_step = -1
     while not stop.wait(interval):  # sleep first (no checkpoint exists at step 0), wake early on stop
-        # Until a checkpoint dir exists, don't spawn upload.py (which would throw a no-checkpoint
-        # traceback during the long download/convert setup). Instead log a calm heartbeat — a clear
-        # "alive and waiting" line, so the empty pre-training phase doesn't look like a hang or a crash.
-        if not any(output.rglob("step*")):
+        steps = [int(p.name[4:]) for p in output.rglob("step*") if p.name[4:].isdigit()]
+        cur_step = max(steps) if steps else 0
+        snapshot = cur_step > 0 and cur_step != last_snapshot_step
+        # (1) logs — every poll, even before the first checkpoint (captures the download/convert/setup phase)
+        upload_run_logs(logdir, output, dataset_repo, cur_step, snapshot)
+        if snapshot:
+            last_snapshot_step = cur_step
+        # (2) checkpoint — only once a dir exists (else upload.py throws a no-checkpoint traceback). A calm
+        # heartbeat in the empty pre-training phase so it doesn't look like a hang or a crash.
+        if not steps:
             log.info("upload watcher: no checkpoint under %s yet — waiting (first save lands after "
                      "model/data download + convert)", output)
             continue
@@ -637,7 +686,13 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     workdir.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
-    setup_logging(logdir)
+    # Per-node log dir — on a shared FS (ABCI binds Lustre at /tmp), all nodes would otherwise clobber one
+    # logdir/run.log + train.py.log (torn, interleaved, unreadable — the "logging problem"). Each node
+    # writes its OWN copy here; the log-uploader already reads logdir/node/<host>/*.log, so this also makes
+    # multi-node log-shipping to the dataset work. Single node = one node folder.
+    node_logdir = logdir / "node" / node_id()
+    node_logdir.mkdir(parents=True, exist_ok=True)
+    setup_logging(node_logdir)
 
     t0 = time.monotonic()
     log.info("Fields Olmo-3 SFT | experiment=%s size=%s precision=%s seq_len=%d",
@@ -663,7 +718,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # on network FS). HF hub cache (workdir/hf_cache, set above) and W&B (workdir/wandb, node-0 single writer)
     # stay SHARED. Set in os.environ so both this process and the training subprocess use them; the
     # subprocess also runs with cwd=<workdir>.
-    nodedir = workdir / "node" / (os.uname().nodename or "node")
+    nodedir = workdir / "node" / node_id()
     wandb_dir = workdir / "wandb"
     for d in (nodedir / "home", nodedir / "tmp", nodedir / "triton", nodedir / "inductor", wandb_dir):
         d.mkdir(parents=True, exist_ok=True)
@@ -702,7 +757,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # Bring up the debug shell ASAP (every node) so you can attach even during download/convert.
     if args.remote_shell:
-        launch_remote_shell(workdir, args.relay_space, logdir)
+        launch_remote_shell(workdir, args.relay_space, node_logdir)
 
     # Batching summary (informational; olmo-core does the real derivation). rank-microbatch must be a
     # multiple of seq_len if set — fail early with a clear message rather than mid-training.
@@ -755,9 +810,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     stop_watcher = threading.Event()
     watcher: Optional[threading.Thread] = None
     if args.upload and is_node_zero():
-        interval = float(os.environ.get("FIELDS_UPLOAD_WATCH_INTERVAL", "300"))
+        interval = float(os.environ.get("FIELDS_UPLOAD_WATCH_INTERVAL", "900"))
+        log_dataset = f"{os.environ.get('FIELDS_HF_NAMESPACE', 'chankhavu')}/{final_name}"
         watcher = threading.Thread(target=upload_watcher,
-                                   args=(output, seq_len, interval, stop_watcher, upload_timeout),
+                                   args=(output, seq_len, interval, stop_watcher, upload_timeout,
+                                         logdir, log_dataset),
                                    name="upload-watcher", daemon=True)
         watcher.start()
 
@@ -767,7 +824,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         # cwd=workdir (writable /tmp), NOT code_root (the read-only baked /app/code) — so any relative-path
         # write from run.sh/torchrun/the worker (e.g. W&B's default ./wandb) lands on the writable mount.
         # run.sh locates itself + the SFT script via $BASH_SOURCE, so it doesn't depend on cwd.
-        rc = stream_run_sh(["bash", str(run_sh)], env, workdir, logdir / "run.log", wb)
+        rc = stream_run_sh(["bash", str(run_sh)], env, workdir, node_logdir / "run.log", wb)
     finally:
         if watcher is not None:
             # Stop the watcher. Its uploads self-terminate within upload_timeout, so this join is BOUNDED

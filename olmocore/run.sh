@@ -15,6 +15,11 @@
 #   (full recipe defaults are seq 65536 / 1,048,576 tok / 2 epochs, multi-GPU).
 set -euo pipefail
 
+# Default the CUDA allocator to expandable segments — reclaims fragmentation (the "reserved but
+# unallocated" memory that builds up over a long run and causes late OOMs). Safe: allocator-only,
+# bit-identical training, no cudagraphs in our stack. A caller-provided value still wins.
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+
 # transformer_engine's _load_nvrtc() does `ldconfig -p | grep libnvrtc.so` at import;
 # the cu13 wheel ships libnvrtc under site-packages/nvidia/cu13/lib which is NOT on the
 # default linker path, so the grep returns non-zero and `import olmo_core.nn.attention`
