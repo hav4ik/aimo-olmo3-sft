@@ -142,11 +142,13 @@ a slow uplink can push past 90 min.
 ### Open items (code improvements offered)
 - Make `FIELDS_UPLOAD_TIMEOUT` **size-aware** (default ~6 h for 32b) + **skip re-convert** if `…/output/model`
   already exists (so a retry doesn't re-pay the convert) — the real robustness fix for the slow-convert loop.
-- ⚠️ **RoPE/YaRN export warning** (separate, must verify): the exported HF `config.json` `rope_scaling` looks
-  **malformed** — `implicit factor = max_position_embeddings / original_max_position_embeddings = -0.0001…`
-  (a tiny *negative* number). The export uses the explicit factor 8.0, but `original_max_position_embeddings`
-  is wrong. **For a long-context (65k) model this could break RoPE at inference — verify the exported
-  `config.json` before trusting the model.** Trace `upload.py:126` rope normalization + `convert_checkpoint`.
+- ✅ **RoPE/YaRN — RESOLVED (training correct, warning benign).** Audited 2026-06-09 (see
+  `fields/NII_debug/ROPE_YARN_AUDIT.md`). Training uses `YaRNRoPEScalingConfig(factor=8, beta_fast=32,
+  beta_slow=1, old_context_len=8192)` + `rope_theta=500_000` — an **exact match** to the official
+  `allenai/Olmo-3.{1-32B,7B}-Think` configs (factor 8 × 8192 = 65536). Weights are safe. The convert
+  warning ("implicit factor -0.0001") is a **transient false alarm**: it's a `max_position_embeddings = -1`
+  placeholder reloaded one line before it's patched to 65536; the FINAL `config.json` is correct, and our
+  `upload.py` mirror doesn't touch the field. No fix needed for correctness (optional: a post-export assert).
 
 ## Conclusions so far
 - ✅ **The 32B shards correctly** across all GPUs in a node (dp_cp). Forward fits at AC 0.0 even on 4×H200.
