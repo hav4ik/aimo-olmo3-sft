@@ -163,7 +163,12 @@ class BatchSizeConfig:
             self.sequence_length & (self.sequence_length - 1)
         ) == 0, "sequence_length must be a power of 2"
         assert self.world_size > 0, "world_size must be positive"
-        assert (self.world_size & (self.world_size - 1)) == 0, "world_size must be a power of 2"
+        # NOTE (local fork change): world_size is NOT required to be a power of two. AI2 upstream asserted it
+        # (their clusters are power-of-two), but the real constraints are just the divisibility checks below.
+        # Dropping it lets a non-pow2 node count work (e.g. 3 nodes -> world_size 24), so ONE global batch can
+        # serve 2/3/4 nodes (1.5M tok -> grad_accum 6/4/3). Kept byte-identical to the 32B script's logic so
+        # the two stay in sync; for every power-of-two shape this 7B has run, the result is UNCHANGED
+        # (verified: 1.05M batch -> grad_accum 8/4/2/1 on 1/2/4/8 nodes, same under the old doubling loop).
 
         # Determine max tokens per rank based on GPU type
         max_tokens_per_rank = MAX_RANK_MICROBATCH_SIZE_TOKENS
@@ -186,26 +191,33 @@ class BatchSizeConfig:
         # Calculate rank batch size and grad accum steps
         cp_factor = self.cp_degree if self.cp_degree is not None else 1
         dp_world_size = self.world_size // cp_factor
+        assert self.global_batch_size_tokens % dp_world_size == 0, (
+            f"global_batch_size_tokens ({self.global_batch_size_tokens}) must be divisible by the data-parallel "
+            f"world size ({dp_world_size} = world_size {self.world_size} / cp {cp_factor}); pick a global batch "
+            f"that is a multiple of {dp_world_size}."
+        )
         rank_batch_size_tokens = self.global_batch_size_tokens // dp_world_size
 
-        # Ensure rank_batch_size_tokens doesn't exceed max_tokens_per_rank (adjusted by the cp_factor)
-        if rank_batch_size_tokens > max_tokens_per_rank * cp_factor:
-            # Need gradient accumulation
-            self.grad_accum_steps = 1
-            while rank_batch_size_tokens // self.grad_accum_steps > (
-                max_tokens_per_rank * cp_factor
-            ):
-                self.grad_accum_steps *= 2
-
-            self.rank_microbatch_size_tokens = rank_batch_size_tokens // self.grad_accum_steps
+        # rank microbatch = the whole sequences that fit the per-rank cap (max_tokens_per_rank x cp). With
+        # intra-doc masking this stays at 1x seq_len for our SFT (cap == seq_len); the general form also
+        # supports B200's 2x cap. grad_accum is then computed DIRECTLY (rank_batch / microbatch), NOT by the
+        # old power-of-two doubling loop — so non-pow2 node counts work (3 nodes/dp_world=6 -> grad_accum 4,
+        # 2 nodes -> 6, 4 nodes -> 3 at a 1.5M global batch). It is IDENTICAL to the old loop whenever the
+        # ratio is already a power of two (e.g. all the pow2 shapes this 7B has run), so those are unchanged.
+        microbatch_cap = max_tokens_per_rank * cp_factor
+        seqs_per_microbatch = max(1, microbatch_cap // self.sequence_length)
+        self.rank_microbatch_size_tokens = seqs_per_microbatch * self.sequence_length
+        assert rank_batch_size_tokens % self.rank_microbatch_size_tokens == 0, (
+            f"rank batch ({rank_batch_size_tokens}) must be a whole multiple of the rank microbatch "
+            f"({self.rank_microbatch_size_tokens}); with {dp_world_size} DP ranks, pick a global batch that "
+            f"is a multiple of {dp_world_size * self.rank_microbatch_size_tokens}."
+        )
+        self.grad_accum_steps = rank_batch_size_tokens // self.rank_microbatch_size_tokens
+        if self.grad_accum_steps > 1:
             log.info(
-                f"Rank batch size ({rank_batch_size_tokens} tokens) exceeds "
-                f"max tokens per rank ({max_tokens_per_rank} tokens). "
-                f"Using grad_accum_steps={self.grad_accum_steps}"
+                f"rank batch {rank_batch_size_tokens} tok / microbatch {self.rank_microbatch_size_tokens} "
+                f"-> grad_accum_steps={self.grad_accum_steps} (dp_world={dp_world_size}, cp={cp_factor})"
             )
-        else:
-            self.rank_microbatch_size_tokens = rank_batch_size_tokens
-            self.grad_accum_steps = 1
 
         # Validate that rank_microbatch_size_tokens is divisible by sequence_length
         assert self.rank_microbatch_size_tokens % self.sequence_length == 0, (
