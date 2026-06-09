@@ -96,10 +96,12 @@ RECIPES: dict[str, Recipe] = {
 }
 
 # Per-GPU activation-token cap that sets cp_degree (cp = smallest pow2 with seq_len/cp <= this), mirroring
-# the SFT script's MAX_RANK_MICROBATCH_SIZE_TOKENS. AI2's 16384 = an H100 heuristic; we DEFAULT 32768 for
-# the H200 (141 GB) -> cp=2 at seq 65536, the most performant point. Override via --max-tokens-per-rank /
-# OLMO_MAX_TOKENS_PER_RANK (e.g. 16384 on an 80 GB H100 / cp=4, or 65536 for cp=1).
-MAX_TOKENS_PER_RANK = int(os.environ.get("OLMO_MAX_TOKENS_PER_RANK", "32768"))
+# the SFT script's MAX_RANK_MICROBATCH_SIZE_TOKENS. DEFAULT 16384 -> cp=4 at seq 65536: this image's
+# PRIMARY TARGET is the 32B fp8, whose fitting shape on 8xH200 is cp=4 (per-rank 16384 tok) at ac-budget
+# 0.4. (The 7B has more headroom and could use 32768/cp=2 for throughput — pass --max-tokens-per-rank
+# 32768 to opt back in.) Override via --max-tokens-per-rank / OLMO_MAX_TOKENS_PER_RANK (32768 => cp=2,
+# 65536 => cp=1).
+MAX_TOKENS_PER_RANK = int(os.environ.get("OLMO_MAX_TOKENS_PER_RANK", "16384"))
 
 log = logging.getLogger("fields.train")
 
@@ -169,8 +171,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--max-tokens-per-rank", "--max_tokens_per_rank", dest="max_tokens_per_rank",
                    type=int, default=MAX_TOKENS_PER_RANK,
                    help="Per-GPU activation-token cap that sets cp_degree (cp = smallest pow2 with "
-                        "seq_len/cp <= this). Default 32768 (H200 => cp=2 at seq 65536). 16384 => cp=4 (H100), "
-                        "65536 => cp=1.")
+                        "seq_len/cp <= this). Default 16384 (=> cp=4 at seq 65536; the 32B's fitting shape). "
+                        "32768 => cp=2, 65536 => cp=1.")
     p.add_argument("--max-steps", "--max_steps", dest="max_steps", type=int, default=0,
                    help="Cap training at N steps (0 => use epochs).")
 
@@ -178,8 +180,9 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--run-suffix", "--run_suffix", dest="run_suffix", default=os.environ.get("RUN_SUFFIX", ""),
                    help="Suffix appended to RUN_NAME (W&B run + checkpoint dir). Default: none.")
     p.add_argument("--olmo-ac-budget", "--olmo_ac_budget", dest="olmo_ac_budget",
-                   default=os.environ.get("OLMO_AC_BUDGET", "0.8"),
-                   help="Activation-checkpointing budget: 1.0=store all (max mem), 0.0=recompute all. Default 0.8.")
+                   default=os.environ.get("OLMO_AC_BUDGET", "0.4"),
+                   help="Activation-checkpointing budget: 1.0=store all (max mem), 0.0=recompute all. "
+                        "Default 0.4 (the 32B fp8 fitting point on 8xH200, ~85%/118GB; the 7B can raise it).")
     p.add_argument("--olmo-fused-lce", "--olmo_fused_lce", dest="olmo_fused_lce",
                    default=os.environ.get("OLMO_FUSED_LCE", "1"),
                    help="Liger fused linear cross-entropy (z-loss fix is in the fork). Default 1 (on).")
