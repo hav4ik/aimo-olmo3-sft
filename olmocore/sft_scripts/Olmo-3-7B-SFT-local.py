@@ -103,7 +103,7 @@ from olmo_core.io import clear_directory, copy_dir, dir_is_empty, get_parent, jo
 from olmo_core.nn.attention import AttentionBackendName  # DIFF #4 (env attn backend)
 from olmo_core.nn.rope import YaRNRoPEScalingConfig
 from olmo_core.nn.transformer import TransformerConfig
-from olmo_core.optim import AdamWConfig, LinearWithWarmup, SkipStepAdamWConfig
+from olmo_core.optim import AdamWConfig, CosWithWarmup, SkipStepAdamWConfig
 from olmo_core.train import (
     Duration,
     LoadStrategy,
@@ -638,9 +638,14 @@ class SFTConfig(Config):
                 dp_config=dp_config,
                 cp_config=cp_config,
                 ac_config=ac_config,
-                scheduler=LinearWithWarmup(
+                scheduler=CosWithWarmup(
                     warmup_fraction=0.03,
-                    alpha_f=0.0,  # lr drops all the way to 0.0 at the end
+                    alpha_f=0.1,  # floor the LR at 0.1*peak (5e-5 -> 5e-6 final), NOT 0. Deliberate, for
+                                  # two reasons: (1) the data is rich enough that we expect to keep
+                                  # improving to the very end, so we don't want to kill the LR; (2) we may
+                                  # model-merge (TIES / checkpoint soup), and a non-collapsed late
+                                  # trajectory keeps the endpoint in a broad, mergeable basin. Cosine (vs
+                                  # linear) still gives a gentler tail: ~0.19*peak at 80% vs linear's 0.28.
                 ),
                 max_grad_norm=1.0,
             ),
