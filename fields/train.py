@@ -211,6 +211,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                    help="After training finishes, convert + upload the final checkpoint via upload.py. Default on.")
     p.add_argument("--no-upload", dest="upload", action="store_false",
                    help="Do not auto-upload; leave the distcp for a manual python /app/upload.py.")
+    p.add_argument("--upload-timeout", "--upload_timeout", dest="upload_timeout", type=float,
+                   default=float(os.environ.get("FIELDS_UPLOAD_TIMEOUT", "5400")),
+                   help="Per-upload wall-clock cap (s) for the background watcher's convert+ship of each "
+                        "checkpoint (a wedged ship is killed + retried next poll; the FINAL end-of-run upload "
+                        "is NEVER capped). Default 5400 (90min) or $FIELDS_UPLOAD_TIMEOUT; raise for the 32B's "
+                        "~64GB ship on a slow uplink.")
 
     # Preflight gate: run smoke_test.py before training and abort if a CRITICAL check fails.
     p.add_argument("--smoke-test", dest="smoke_test", action="store_true",
@@ -808,7 +814,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # PARALLEL with training — CPU-only convert, best-effort, never blocks the GPUs. Each upload is bounded
     # by FIELDS_UPLOAD_TIMEOUT (default 90min) so a wedged ship can't stall the loop OR the shutdown join.
     # Disable via --no-upload.
-    upload_timeout = float(os.environ.get("FIELDS_UPLOAD_TIMEOUT", "5400"))
+    upload_timeout = args.upload_timeout   # --upload-timeout (defaults to $FIELDS_UPLOAD_TIMEOUT / 5400s)
     stop_watcher = threading.Event()
     watcher: Optional[threading.Thread] = None
     if args.upload and is_node_zero():
