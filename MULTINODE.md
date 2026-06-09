@@ -24,10 +24,17 @@ world_size W …` and `[olmocore] … {N}x8 … node {K}/{N}` — check those tw
 topology before training.
 
 ## Two hard requirements
-1. **Node count must be a power of two** (1, 2, 4, 8 …). olmo-core requires a power-of-two
-   `world_size = nodes × 8`; since 8 = 2³, the **node count itself** must be a power of two.
-   **3 nodes is rejected** (24 is not a power of two) — the container fails fast with that message.
-   For the 7B fp8 production shape, use **2 or 4 nodes**.
+1. **The global batch must divide evenly across the data-parallel world.** The node count does **not**
+   have to be a power of two — the container accepts any node count whose data-parallel world divides
+   the global batch. At seq 65536 the context-parallel degree is `cp=4`, so
+   `dp_world = nodes × 8 / cp = nodes × 2`, and the rule is **`global_batch % (nodes × 2) == 0`**.
+   - **32B (1,572,864-token batch): 2, 3, or 4 nodes** all divide cleanly → grad_accum 6 / 4 / 3.
+   - **7B (1,048,576-token batch): 1, 2, 4, or 8 nodes** → grad_accum 8 / 4 / 2 / 1. **3 nodes is NOT
+     valid for the 7B** (1,048,576 is not divisible by 6); the 7B's 1.05M batch only divides for
+     power-of-two node counts. (3 nodes works for the **32B** because 1.5M *is* divisible by 6.)
+
+   If a node-count / batch combination doesn't divide, the container **fails fast at startup** with a
+   clear "pick a global batch that is a multiple of N" message — it never silently mis-shapes the run.
 2. **`--workdir` and the output path must be on shared storage** across all nodes: node 0 downloads +
    converts the base model while the others wait on a sentinel file, and all ranks write distcp
    checkpoint shards into one shared save folder. A non-shared FS makes the waiters time out (~2 h)
@@ -58,7 +65,7 @@ singularity exec --nv --containall <your binds> olmo-sft-v2.1-allsm.sif \
 Identical container on every node; only `GLOBAL_RANK` differs.
 ```bash
 # per-node, run by your PBS wrapper on each of the 4 nodes:
-export APPTAINERENV_WORLD_SIZE=4                 # number of NODES (power of two)
+export APPTAINERENV_WORLD_SIZE=4                 # number of NODES (any count whose dp-world divides the batch — see "hard requirements")
 export APPTAINERENV_GLOBAL_RANK="$NODE_INDEX"    # 0, 1, 2, 3
 export APPTAINERENV_MASTER_ADDR="$HEAD_NODE"     # node 0's address, reachable from all nodes
 export APPTAINERENV_MASTER_PORT=29400
