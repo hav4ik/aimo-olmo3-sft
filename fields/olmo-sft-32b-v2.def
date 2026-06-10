@@ -1,0 +1,63 @@
+# Singularity/Apptainer definition for the Fields Model submission image — olmo-sft-32b-v2.sif
+# (the v2.2.1 code line; dotless filename per NII's convention). allsm = base built for all SM archs.
+#
+# v2.2.1 over v2.2 (REUSED-VOLUME SAFETY — the fix for the NII stale-distcp crash):
+#   - Work/output dirs are now NAMESPACED BY EXPERIMENT: default /tmp/olmo-sft/<experiment>/{work,output}
+#     (the image bakes only FIELDS_BASE=/tmp/olmo-sft, NOT FIELDS_WORKDIR/FIELDS_OUTPUT). Binding the SAME
+#     /tmp host dir across runs can no longer cross-contaminate: a prior 7B run's base-distcp OR dataset
+#     can't be loaded into a 32B run. That exact mix-up (a 7B distcp -> 32B build) crashed an NII run with
+#     `Size mismatch ... model.embeddings.weight [100352,4096] vs [100352,5120]`. An explicit
+#     --workdir/--output (or FIELDS_WORKDIR/FIELDS_OUTPUT) is still honored verbatim, with no namespacing.
+#   - upload.py auto-discovers the namespaced output for a bare `python /app/upload.py` recovery.
+#   - LOG-ON-FAILURE: train.py flushes the run logs to HF on ANY exit (crash OR success), node 0, before
+#     the final model upload — so a fast crash no longer ships zero logs (the NII run died in ~90 s and
+#     uploaded nothing under v2.2).
+#
+# v2.2 (retained): 32B-primary defaults (--experiment olmo_32b_fp8, 1.5M global batch divisible for
+#   WORLD_SIZE 2/3/4/6 at cp=4, --max-tokens-per-rank 16384, --olmo-ac-budget 0.4, --keep-last 1), cosine
+#   LR alpha_f=0.1 (5e-5 -> 5e-6), dataset chankhavu/smolmo-sft-olmocore-pretokenized (subdir olmocore).
+# v2.1 fix (retained): ships its OWN real nvcc (CUDA-13.0 wheels) first on PATH (/opt/fields/bin) so the
+#   container never resolves a HOST nvcc — the noexec-host-nvcc PermissionError that crashed every rank.
+#
+# Bootstraps from the LOCAL docker image (chankhavu/olmo3-sft-v2.2.1:cu130-allsm) and bakes the real
+# credentials (fields/SECRETS.json) into /app/SECRETS.json so the container needs no `-e` on the
+# NII/ABCI Singularity cluster. The docker image itself is pushed WITHOUT secrets (.dockerignore drops
+# SECRETS.json); the secrets live ONLY in this locally-built .sif — never push this .sif to a public registry.
+#
+# Build (from repo root, so %files paths resolve):
+#   bash fields/build_sif.sh olmo-sft-32b-v2.sif chankhavu/olmo3-sft-v2.2.1:cu130-allsm fields/olmo-sft-32b-v2.def
+# NOTE: apptainer/SingularityCE 1.5.1 bundles mksquashfs 4.7.5, which can crash on this ~12GB rootfs
+# ("Bug in orderer"/SIGSEGV). build_sif.sh works around it via sandbox + system mksquashfs.
+#
+# Run — the 4 topology vars are REQUIRED (even single-node); a bare call runs the default 32B fp8 shape.
+# Single node (8 GPUs):
+#   singularity run --nv --containall \
+#     --bind /scratch/$USER/training:/tmp \
+#     --env WORLD_SIZE=1,GLOBAL_RANK=0,MASTER_ADDR=127.0.0.1,MASTER_PORT=29400 \
+#     olmo-sft-32b-v2.sif --no-remote-shell
+# Multi-node (2/3/4/6 nodes): per-node GLOBAL_RANK, shared MASTER_ADDR:PORT, shared --bind volume — see MULTINODE.md.
+
+Bootstrap: docker-daemon
+From: chankhavu/olmo3-sft-v2.2.1:cu130-allsm
+
+%files
+    # Bake real credentials into the .sif (HF_TOKEN + WANDB_API_KEY). secrets_loader reads
+    # /app/SECRETS.json; a same-named env var still wins at runtime.
+    fields/SECRETS.json /app/SECRETS.json
+
+%runscript
+    # Mirror the docker ENTRYPOINT explicitly so `singularity run <sif> <flags>` == train.py.
+    exec python /app/train.py "$@"
+
+%labels
+    org.fields.entrypoint /app/train.py
+    org.fields.base chankhavu/olmo3-sft-v2.2.1:cu130-allsm
+    org.fields.secrets baked
+    org.fields.version v2.2.1
+
+%help
+    Fields Model SFT image v2.2.1 (Olmo-3, 32B-primary). Entrypoint: python /app/train.py. Work/output
+    dirs are namespaced by experiment (/tmp/olmo-sft/<experiment>/{work,output}) so a reused /tmp bind
+    can't cross-contaminate runs; run logs are flushed to HF on any exit. Ships its own nvcc. The four
+    topology vars (WORLD_SIZE/GLOBAL_RANK/MASTER_ADDR/MASTER_PORT) are required. Bind a host dir to /tmp
+    and pass train.py flags after the .sif path. A bare run uses olmo_32b_fp8 (cp=4, ac 0.4, 1.5M batch).

@@ -137,11 +137,14 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 
     # The two roots the user asked for. Default UNDER /tmp — the dir the cluster always binds (e.g.
     # `singularity run --containall --bind <host>:/tmp …`), so writes land on a real volume even when
-    # nothing else is bound. Override with --workdir/--output (or FIELDS_WORKDIR/FIELDS_OUTPUT).
-    p.add_argument("--workdir", default=os.environ.get("FIELDS_WORKDIR", "/tmp/olmo-sft/work"),
-                   help="Scratch root: base model, tokenized dataset and code are downloaded here.")
-    p.add_argument("--output", default=os.environ.get("FIELDS_OUTPUT", "/tmp/olmo-sft/output"),
-                   help="Deliverable root: logs + training checkpoints (upload.py converts + ships from here).")
+    # nothing else is bound. DEFAULTS ARE NAMESPACED BY EXPERIMENT — /tmp/olmo-sft/<experiment>/{work,output}
+    # — so a REUSED volume can never cross-contaminate: a prior 7B's base-distcp OR dataset can't be picked
+    # up by a 32B run (that exact stale-distcp mix-up crashed an NII run). Pass --workdir/--output (or
+    # FIELDS_WORKDIR/FIELDS_OUTPUT) for an explicit path; then it's used as-is, no namespacing.
+    p.add_argument("--workdir", default=os.environ.get("FIELDS_WORKDIR", ""),
+                   help="Scratch root (base model, tokenized dataset, code). Default /tmp/olmo-sft/<experiment>/work.")
+    p.add_argument("--output", default=os.environ.get("FIELDS_OUTPUT", ""),
+                   help="Deliverable root (logs + checkpoints). Default /tmp/olmo-sft/<experiment>/output.")
 
     # Fields-standard paths (optional — override the corresponding download when a local path is given).
     p.add_argument("--model_path", default="",
@@ -708,8 +711,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     # Global batch: explicit CLI wins; else the recipe's small default (1b); else the AI2 7B default.
     args.global_batch_tokens = args.global_batch_tokens or recipe.default_global_batch or 1_572_864
 
-    output = Path(args.output_path or args.output).resolve()
-    workdir = Path(args.workdir).resolve()
+    # Per-experiment namespacing: an explicit --workdir/--output (or FIELDS_WORKDIR/FIELDS_OUTPUT) wins as-is;
+    # otherwise default to /tmp/olmo-sft/<experiment>/{work,output} so a REUSED volume isolates each
+    # experiment's base-distcp + dataset + checkpoints (a stale 7B distcp can't be loaded into a 32B run).
+    _base = Path(os.environ.get("FIELDS_BASE", "/tmp/olmo-sft"))
+    _out = args.output_path or args.output
+    output = Path(_out).resolve() if _out else (_base / args.experiment / "output").resolve()
+    workdir = Path(args.workdir).resolve() if args.workdir else (_base / args.experiment / "work").resolve()
     logdir = Path(args.logdir).resolve() if args.logdir else output / "logs"
     save_root = output / "internal"          # training checkpoints + work_dir live here
     ckpt_base = workdir / "base-distcp"       # one-time HF->distcp conversion of the base model
@@ -839,9 +847,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     upload_timeout = args.upload_timeout   # --upload-timeout (defaults to $FIELDS_UPLOAD_TIMEOUT / 5400s)
     stop_watcher = threading.Event()
     watcher: Optional[threading.Thread] = None
+    # Private run-logs dataset (node 0). Hoisted out of the if so the FINAL log flush in the finally can
+    # reference it even when the run dies before the watcher started or before its first poll.
+    log_dataset = f"{os.environ.get('FIELDS_HF_NAMESPACE', 'chankhavu')}/{final_name}"
     if args.upload and is_node_zero():
         interval = float(os.environ.get("FIELDS_UPLOAD_WATCH_INTERVAL", "900"))
-        log_dataset = f"{os.environ.get('FIELDS_HF_NAMESPACE', 'chankhavu')}/{final_name}"
         watcher = threading.Thread(target=upload_watcher,
                                    args=(output, seq_len, interval, stop_watcher, upload_timeout,
                                          logdir, log_dataset),
@@ -861,6 +871,17 @@ def main(argv: Optional[list[str]] = None) -> int:
             # (can't hang) and guarantees no watcher convert is still running when the final convert starts.
             stop_watcher.set()
             watcher.join(timeout=upload_timeout + 300)
+        # ALWAYS flush the run logs on exit — success OR crash — node 0, best-effort, never raises. This is
+        # the ONLY way the crash traceback + final state reach the logs dataset when the run dies BEFORE the
+        # first watcher poll (e.g. a startup crash like the base-model shape mismatch) or between polls. It
+        # runs BEFORE the uncapped final model upload so a slow/hung deliverable ship can't starve it.
+        if args.upload and is_node_zero():
+            try:
+                _steps = [int(p.name[4:]) for p in output.rglob("step*") if p.name[4:].isdigit()]
+                upload_run_logs(logdir, output, log_dataset, max(_steps, default=0), snapshot=True)
+                log.info("final run-log flush -> hf://datasets/%s", log_dataset)
+            except Exception as _exc:  # noqa: BLE001 — must never mask the original failure
+                log.warning("final log flush failed (%s)", _exc)
 
     elapsed_min = (time.monotonic() - t0) / 60.0
     if rc == 0:

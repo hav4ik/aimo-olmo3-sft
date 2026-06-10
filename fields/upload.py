@@ -44,7 +44,24 @@ except ImportError:
 OLMO_CORE_ROOT = Path(os.environ.get("OLMO_CORE_ROOT", "/workspace/OLMo-core"))
 CONVERT_TO_HF = OLMO_CORE_ROOT / "src" / "examples" / "huggingface" / "convert_checkpoint_to_hf.py"
 TOKENIZER = "dolma2"
-DEFAULT_OUTPUT = os.environ.get("FIELDS_OUTPUT", "/tmp/olmo-sft/output")
+def discover_default_output() -> str:
+    """Default --output for a BARE recovery run (`python /app/upload.py` with no --output). train.py
+    namespaces its output by experiment (/tmp/olmo-sft/<experiment>/output) so a REUSED volume can't
+    cross-contaminate runs; upload.py isn't told the experiment, so when FIELDS_OUTPUT isn't set we pick
+    — among the candidate output dirs under the base — the one holding the HIGHEST-step distcp checkpoint
+    (that's the run worth shipping). Falls back to the legacy flat /tmp/olmo-sft/output."""
+    env = os.environ.get("FIELDS_OUTPUT")
+    if env:
+        return env
+    base = Path(os.environ.get("FIELDS_BASE", "/tmp/olmo-sft"))
+    best, best_step = None, -1
+    for cand in [base / "output", *sorted(base.glob("*/output"))]:
+        if not cand.is_dir():
+            continue
+        top = max((int(p.name[4:]) for p in cand.rglob("step*") if p.name[4:].isdigit()), default=-1)
+        if top > best_step:
+            best, best_step = cand, top
+    return str(best if best is not None else base / "output")
 # The HF upload ALWAYS lands here, no matter what the caller passes — so organizers can't push it to the
 # wrong namespace or collide a name. The repo id is forced to <HF_NAMESPACE>/<base>-<YYYYMMDDHHMMSS>.
 HF_NAMESPACE = os.environ.get("FIELDS_HF_NAMESPACE", "chankhavu")
@@ -300,9 +317,10 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Convert + upload the Fields training result",
                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     # The only required input: the train.py output dir (Fields' --source_dir / --output_path are aliases).
-    p.add_argument("--output", "--source_dir", "--output_path", dest="output", default=DEFAULT_OUTPUT,
+    p.add_argument("--output", "--source_dir", "--output_path", dest="output", default="",
                    help="train.py output dir. upload.py finds the distcp under it, converts to "
-                        "<output>/model, and uploads that.")
+                        "<output>/model, and uploads that. Default: auto-discover the experiment's "
+                        "namespaced output (/tmp/olmo-sft/<experiment>/output) with the latest checkpoint.")
     p.add_argument("--skip-convert", "--skip_convert", dest="skip_convert", action="store_true",
                    help="Skip conversion; upload an existing <output>/model as-is.")
     p.add_argument("--final", action="store_true",
@@ -328,7 +346,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     load_secrets()  # HF_TOKEN from baked SECRETS.json, else env
     args = parse_args(argv)
 
-    output = Path(args.output).resolve()
+    output = Path(args.output or discover_default_output()).resolve()
     hf_model = output / "model"
 
     checkpoint: Optional[Path] = None

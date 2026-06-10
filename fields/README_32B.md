@@ -93,11 +93,17 @@ By default everything lives under the `/tmp` bind. To put any individual piece o
 
 | flag | relocates | default |
 |---|---|---|
-| `--workdir`      | downloads, HF cache, W&B, compile caches, scratch | `/tmp/olmo-sft/work` |
-| `--output_path`  | checkpoints | `/tmp/olmo-sft/output` |
+| `--workdir`      | downloads, HF cache, W&B, compile caches, scratch | `/tmp/olmo-sft/<experiment>/work` |
+| `--output_path`  | checkpoints | `/tmp/olmo-sft/<experiment>/output` |
 | `--logdir`       | logs | `<output>/logs` |
 | `--model_path`   | an **existing** base-model dir (skips the model download) | downloaded into the work dir |
 | `--dataset_path` | an **existing** tokenized-dataset dir (skips the data download) | downloaded into the work dir |
+
+> **Reused volumes are safe.** The default work/output dirs are **namespaced by experiment**
+> (`/tmp/olmo-sft/<experiment>/…`), so binding the **same** `/tmp` host dir across runs can never let one
+> experiment pick up another's converted base model or dataset — a 7B run and a 32B run write to separate
+> trees. (An explicit `--workdir`/`--output_path` is used verbatim, with no namespacing.) The recovery
+> command above auto-discovers the namespaced output, so it needs no extra flag.
 
 ```bash
 singularity run --nv --containall \

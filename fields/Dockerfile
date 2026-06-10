@@ -60,11 +60,14 @@ COPY fields/SECRETS*.json /app/
 
 # Defaults live UNDER /tmp — the dir the cluster always binds (e.g. `singularity run --containall
 # --bind <host>:/tmp …`), so downloads/checkpoints land on a real volume even when nothing else is
-# bound. Override with --workdir/--output (or FIELDS_WORKDIR/FIELDS_OUTPUT/HF_HOME).
+# bound. We bake ONLY FIELDS_BASE (the parent), NOT FIELDS_WORKDIR/FIELDS_OUTPUT: train.py namespaces
+# the work/output dirs by experiment under FIELDS_BASE — /tmp/olmo-sft/<experiment>/{work,output} — so a
+# REUSED bind can't cross-contaminate runs (a 7B's base-distcp/dataset can't be loaded into a 32B run).
+# Baking FIELDS_WORKDIR/FIELDS_OUTPUT would be read as an explicit path and DISABLE that namespacing;
+# they still work as runtime overrides (--workdir/--output or FIELDS_WORKDIR/FIELDS_OUTPUT) → used as-is.
 ENV FIELDS_CODE_ROOT=/app/code \
     OLMO_CORE_ROOT=/workspace/OLMo-core \
-    FIELDS_WORKDIR=/tmp/olmo-sft/work \
-    FIELDS_OUTPUT=/tmp/olmo-sft/output \
+    FIELDS_BASE=/tmp/olmo-sft \
     HF_HOME=/tmp/olmo-sft/hf_cache
 WORKDIR /app
 # train.py is the entrypoint; `docker run <img> --experiment olmo_7b_bf16 ...` passes flags straight in.

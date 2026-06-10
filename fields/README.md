@@ -69,8 +69,8 @@ By default everything lives under the `/tmp` bind. To put any individual piece o
 
 | flag | relocates | default |
 |---|---|---|
-| `--workdir`      | downloads, HF cache, W&B, compile caches, scratch | `/tmp/olmo-sft/work` |
-| `--output_path`  | checkpoints | `/tmp/olmo-sft/output` |
+| `--workdir`      | downloads, HF cache, W&B, compile caches, scratch | `/tmp/olmo-sft/<experiment>/work` |
+| `--output_path`  | checkpoints | `/tmp/olmo-sft/<experiment>/output` |
 | `--logdir`       | logs | `<output>/logs` |
 | `--model_path`   | an **existing** base-model dir (skips the model download) | downloaded into the work dir |
 | `--dataset_path` | an **existing** tokenized-dataset dir (skips the data download) | downloaded into the work dir |
