@@ -47,9 +47,11 @@ NPROC="${NPROC_PER_NODE:-$(nvidia-smi -L | wc -l)}"
 : "${MASTER_PORT:?[olmocore] not set — rendezvous port}"
 # Model + recipe by size (the EXPERIMENT/MODEL_SIZE front-end sets MODEL_SIZE; explicit env wins).
 MODEL_SIZE="${MODEL_SIZE:-7b}"
-# DEF_KEEP = default cap on persistent checkpoints kept on disk (distcp ~100 GB/7B, ~450 GB/32B vs
-# the ~1 TB budget): 7B keep 2 (~200 GB), 32B keep 2 (~900 GB). Override with OLMO_KEEP_LAST_CKPTS (0=all).
-# Via fields/train.py this is always set from --keep-last (default 2); DEF_KEEP is only the fallback for
+# DEF_KEEP = default cap on persistent checkpoints kept on disk (distcp ~100 GB/7B, ~251 GB/32B). On a
+# ~1 TB disk shared with a ~200 GB dataset, the 32B can only afford 2 checkpoints total: 32B keep 1
+# (1 persistent ~251 GB + 1 rotating ephemeral ~251 GB = ~502 GB, leaving room for data + an in-flight
+# save). 7B keep 2 (~200 GB, it has headroom). Override with OLMO_KEEP_LAST_CKPTS (0=all).
+# Via fields/train.py this is always set from --keep-last (default 1); DEF_KEEP is only the fallback for
 # running run.sh directly. Keep the two in sync.
 # DEF_SFT = the size-specific SFT script basename under sft_scripts/ (resolved to a path further down).
 # The 7B/32B share the olmo3 long-context script; 1b is a separate LOCAL TEST path on the real published
@@ -60,7 +62,7 @@ MODEL_SIZE="${MODEL_SIZE:-7b}"
 case "$MODEL_SIZE" in
     1b)  HF_MODEL="${HF_MODEL:-allenai/OLMo-2-0425-1B-Instruct}"; MODEL_ARCH="${MODEL_ARCH:-olmo2_1b_v2}"; DEF_LR=5e-5; DEF_GBS=4096;    DEF_KEEP=1; DEF_SFT=Olmo-2-1B-SFT-local.py;  DEF_SEQ_LEN=4096 ;;
     7b)  HF_MODEL="${HF_MODEL:-allenai/Olmo-3-7B-Think}";    MODEL_ARCH="${MODEL_ARCH:-olmo3_7b}";  DEF_LR=5e-5; DEF_GBS=1048576; DEF_KEEP=2; DEF_SFT=Olmo-3-7B-SFT-local.py;  DEF_SEQ_LEN=65536 ;;
-    32b) HF_MODEL="${HF_MODEL:-allenai/Olmo-3.1-32B-Think}"; MODEL_ARCH="${MODEL_ARCH:-olmo3_32b}"; DEF_LR=5e-5; DEF_GBS=1572864; DEF_KEEP=2; DEF_SFT=Olmo-3-32B-SFT-local.py; DEF_SEQ_LEN=65536 ;;  # GBS 1.5M = 1572864 -> divides for 2/3/4 nodes (cp=4); lr 5e-5 sits between linear/sqrt scaling of AI2's 1e-4@4.19M
+    32b) HF_MODEL="${HF_MODEL:-allenai/Olmo-3.1-32B-Think}"; MODEL_ARCH="${MODEL_ARCH:-olmo3_32b}"; DEF_LR=5e-5; DEF_GBS=1572864; DEF_KEEP=1; DEF_SFT=Olmo-3-32B-SFT-local.py; DEF_SEQ_LEN=65536 ;;  # GBS 1.5M = 1572864 -> divides for 2/3/4 nodes (cp=4); lr 5e-5 sits between linear/sqrt scaling of AI2's 1e-4@4.19M
     *)   echo "ERROR: MODEL_SIZE='$MODEL_SIZE' (want 1b|7b|32b)"; exit 2 ;;
 esac
 SFT_SCRIPT_NAME="${SFT_SCRIPT_NAME:-$DEF_SFT}"   # per-size SFT script basename; explicit env wins

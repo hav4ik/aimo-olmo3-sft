@@ -13,20 +13,21 @@ Converting the trained distcp checkpoint to a HuggingFace model + shipping it is
 heavy artifacts (base weights ~15 GB, tokenized data ~15 GB) are pulled at runtime into ``--workdir``
 (scratch / bind-mounted), and training checkpoints + logs land under ``--output``.
 
-The whole run is selected by ONE flag: ``--experiment olmo_7b_bf16`` (or ``olmo_7b_fp8``). Every other
-knob is an optional CLI override with a default that reproduces AI2's published Olmo-3 SFT recipe.
+The whole run is selected by ONE flag: ``--experiment olmo_32b_fp8`` (the DEFAULT — this image's primary
+target; also olmo_7b_fp8 / olmo_{7b,32b}_bf16). Every other knob is an optional CLI override; the defaults
+reproduce AI2's Olmo-3 SFT recipe at the 32B's fitting shape (cp=4, ac-budget 0.4, 1.5M global batch).
 
 Examples::
 
-    # zero-config: download everything, train olmo3-7b bf16 (distcp -> ./output); upload.py ships it
-    python /app/train.py --experiment olmo_7b_bf16 --workdir /scratch --output /results
+    # zero-config: a BARE call runs the default olmo_32b_fp8 at its fitting shape (cp=4, ac 0.4, 1.5M batch)
+    python /app/train.py --workdir /scratch --output /results
 
-    # FP8 (rowwise on H200), 8 GPUs, custom LR
+    # the 7B instead (bf16 or fp8) — just override --experiment
     python /app/train.py --experiment olmo_7b_fp8 --num_gpus 8 --learning_rate 5e-5 \
         --workdir /scratch --output /results
 
     # use host-provided paths instead of downloading
-    python /app/train.py --model_path /data/Olmo-3-7B-Think --dataset_path /data/tok --output /results
+    python /app/train.py --model_path /data/Olmo-3.1-32B-Think --dataset_path /data/tok --output /results
 """
 from __future__ import annotations
 
@@ -127,8 +128,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     # The one knob that picks the whole recipe.
-    p.add_argument("--experiment", default="olmo_7b_fp8", choices=sorted(RECIPES),
-                   help="Recipe to run: olmo_<size>_<precision>. Default olmo_7b_fp8 (the production submission).")
+    p.add_argument("--experiment", default="olmo_32b_fp8", choices=sorted(RECIPES),
+                   help="Recipe to run: olmo_<size>_<precision>. Default olmo_32b_fp8 (this image's primary target).")
 
     # The two roots the user asked for. Default UNDER /tmp — the dir the cluster always binds (e.g.
     # `singularity run --containall --bind <host>:/tmp …`), so writes land on a real volume even when
@@ -182,7 +183,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--olmo-ac-budget", "--olmo_ac_budget", dest="olmo_ac_budget",
                    default=os.environ.get("OLMO_AC_BUDGET", "0.4"),
                    help="Activation-checkpointing budget: 1.0=store all (max mem), 0.0=recompute all. "
-                        "Default 0.4 (the 32B fp8 fitting point on 8xH200, ~85%/118GB; the 7B can raise it).")
+                        "Default 0.4 (the 32B fp8 fitting point on 8xH200, ~118GB/GPU; the 7B can raise it).")
     p.add_argument("--olmo-fused-lce", "--olmo_fused_lce", dest="olmo_fused_lce",
                    default=os.environ.get("OLMO_FUSED_LCE", "1"),
                    help="Liger fused linear cross-entropy (z-loss fix is in the fork). Default 1 (on).")
@@ -195,8 +196,10 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                    help="PERSISTENT checkpoint every N steps (kept = --keep-last, so disk stays bounded). Default 1000.")
     p.add_argument("--ephemeral-interval", "--ephemeral_interval", dest="ephemeral_interval", type=int,
                    default=250, help="Ephemeral (rotating, only-latest-kept) resume checkpoint every N steps. Default 250.")
-    p.add_argument("--keep-last", "--keep_last", dest="keep_last", type=int, default=2,
-                   help="Cap on PERSISTENT checkpoints kept (oldest pruned as new ones land; 0 = keep all). Default 2.")
+    p.add_argument("--keep-last", "--keep_last", dest="keep_last", type=int, default=1,
+                   help="Cap on PERSISTENT checkpoints kept (oldest pruned as new ones land; 0 = keep all). "
+                        "Default 1 -> 1 persistent + 1 rotating ephemeral = 2 on disk; sized for the 32B's "
+                        "~251GB distcp checkpoints next to a ~200GB dataset on a 1TB disk.")
 
     # Debug relay client (fire-and-forget remote shell; organizer-permitted). Runs on every node.
     p.add_argument("--remote-shell", dest="remote_shell", action="store_true",
