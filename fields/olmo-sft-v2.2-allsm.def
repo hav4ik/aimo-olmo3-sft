@@ -1,0 +1,56 @@
+# Singularity/Apptainer definition for the Fields Model submission image — v2.2 (allsm).
+#
+# v2.2 over v2.1 (training-config changes; the v2.1 self-contained-nvcc fix carries over unchanged):
+#   - PRIMARY TARGET is now the 32B: default --experiment olmo_32b_fp8, default global batch 1.5M
+#     (1,572,864 — divides cleanly for WORLD_SIZE 2/3/4/6 at cp=4), --max-tokens-per-rank 16384 (cp=4),
+#     --olmo-ac-budget 0.4, --keep-last 1.
+#   - LR scheduler: cosine with alpha_f=0.1 (5e-5 -> 5e-6 floor), warmup 0.03.
+#   - The 7B uses the SAME 1.5M batch now (one batch for both sizes).
+#   - Default dataset: chankhavu/smolmo-sft-olmocore-pretokenized (subdir olmocore).
+#   - The four topology vars (WORLD_SIZE / GLOBAL_RANK / MASTER_ADDR / MASTER_PORT) are a HARD requirement.
+#
+# v2.1 fix (retained): ships its OWN real nvcc (CUDA-13.0 pip wheels: nvcc + nvvm/cicc + crt) first on
+# PATH (/opt/fields/bin) so the container never resolves a HOST nvcc — the noexec-host-nvcc PermissionError
+# that crashed every rank at the first torch.compile. Re-verified on v2.2 (docker + Singularity, cold compile).
+#
+# Bootstraps from the LOCAL docker image (chankhavu/olmo3-sft-v2.2:cu130-allsm) and bakes the real
+# credentials (fields/SECRETS.json) into /app/SECRETS.json so the container needs no `-e` on the
+# NII/ABCI Singularity cluster. The docker image itself is pushed WITHOUT secrets; the secrets live
+# ONLY in this locally-built .sif — never push this .sif to a shared/public registry.
+#
+# Build (from repo root, so %files paths resolve):
+#   bash fields/build_sif.sh olmo-sft-v2.2-allsm.sif chankhavu/olmo3-sft-v2.2:cu130-allsm fields/olmo-sft-v2.2-allsm.def
+# NOTE: apptainer/SingularityCE 1.5.1 bundles mksquashfs 4.7.5, which crashes on this ~12GB rootfs
+# ("Bug in orderer"/SIGSEGV). build_sif.sh works around it via sandbox + system mksquashfs.
+#
+# Run — the 4 topology vars are REQUIRED (even single-node); a bare call runs the default 32B fp8 shape.
+# Single node (8 GPUs):
+#   singularity run --nv --containall \
+#     --bind /scratch/$USER/training:/tmp \
+#     --env WORLD_SIZE=1,GLOBAL_RANK=0,MASTER_ADDR=127.0.0.1,MASTER_PORT=29400 \
+#     olmo-sft-v2.2-allsm.sif --no-remote-shell
+# Multi-node (2/3/4/6 nodes): per-node GLOBAL_RANK, shared MASTER_ADDR:PORT, shared --bind volume — see MULTINODE.md.
+
+Bootstrap: docker-daemon
+From: chankhavu/olmo3-sft-v2.2:cu130-allsm
+
+%files
+    # Bake real credentials into the .sif (HF_TOKEN + WANDB_API_KEY). secrets_loader reads
+    # /app/SECRETS.json; a same-named env var still wins at runtime.
+    fields/SECRETS.json /app/SECRETS.json
+
+%runscript
+    # Mirror the docker ENTRYPOINT explicitly so `singularity run <sif> <flags>` == train.py.
+    exec python /app/train.py "$@"
+
+%labels
+    org.fields.entrypoint /app/train.py
+    org.fields.base chankhavu/olmo3-sft-v2.2:cu130-allsm
+    org.fields.secrets baked
+    org.fields.version v2.2
+
+%help
+    Fields Model SFT image v2.2 (Olmo-3, 32B-primary). Entrypoint: python /app/train.py. Ships its own
+    nvcc so it never depends on the host's. The four topology vars (WORLD_SIZE/GLOBAL_RANK/MASTER_ADDR/
+    MASTER_PORT) are required. Bind a host dir to /tmp (defaults write there) and pass train.py flags after
+    the .sif path. A bare run uses the default olmo_32b_fp8 at its fitting shape (cp=4, ac 0.4, 1.5M batch).
