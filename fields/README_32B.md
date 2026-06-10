@@ -21,7 +21,7 @@ The container writes everything — HF cache, base-model + dataset downloads, ch
 
 ### 1. Train (this is all you need to do, nothing more)
 
-Run the experiment with the provided container `olmo-sft-v2.2-allsm.sif`. `/app/train.py` is the container's default entrypoint, so **`singularity run`** passes the flags straight to it. **A bare run trains the 32B at its fitting shape** — the defaults (`--experiment olmo_32b_fp8`, `--max-tokens-per-rank 16384`, `--olmo-ac-budget 0.4`, 1.5M-token batch, `--keep-last 1`) are already the 32B's, so you don't pass them.
+Run the experiment with the provided container `olmo-sft-32b-v2.sif`. `/app/train.py` is the container's default entrypoint, so **`singularity run`** passes the flags straight to it. **A bare run trains the 32B at its fitting shape** — the defaults (`--experiment olmo_32b_fp8`, `--max-tokens-per-rank 16384`, `--olmo-ac-budget 0.4`, 1.5M-token batch, `--keep-last 1`) are already the 32B's, so you don't pass them.
 
 > **Required topology vars.** The container needs four env vars set **explicitly** — `WORLD_SIZE` (number of nodes), `GLOBAL_RANK` (this node's 0-based index), `MASTER_ADDR`, `MASTER_PORT`. It never infers them, and under `--containall` the host env is **not** inherited, so pass them via `--env` (or `APPTAINERENV_*`). The single-node values are shown below; for multi-node (2/3/4/6 nodes) see **[MULTINODE.md](../MULTINODE.md)**.
 
@@ -31,7 +31,7 @@ singularity run --nv --containall \
   --home "$PWD:/home/guest" \
   --pwd /home/guest \
   --env WORLD_SIZE=1,GLOBAL_RANK=0,MASTER_ADDR=127.0.0.1,MASTER_PORT=29400 \
-  olmo-sft-v2.2-allsm.sif \
+  olmo-sft-32b-v2.sif \
   --run-suffix niicluster
 ```
 
@@ -52,7 +52,7 @@ singularity exec --nv --containall \
   --bind /host/scratch:/tmp \
   --home "$PWD:/home/guest" \
   --pwd /home/guest \
-  olmo-sft-v2.2-allsm.sif \
+  olmo-sft-32b-v2.sif \
   python /app/upload.py
 ```
 
@@ -115,7 +115,7 @@ singularity run --nv --containall \
   --home "$PWD:/home/guest" \
   --pwd /home/guest \
   --env WORLD_SIZE=1,GLOBAL_RANK=0,MASTER_ADDR=127.0.0.1,MASTER_PORT=29400 \
-  olmo-sft-v2.2-allsm.sif \
+  olmo-sft-32b-v2.sif \
   --workdir      /mnt/work \
   --output_path  /mnt/output \
   --model_path   /mnt/model \
@@ -155,6 +155,6 @@ A few engineering details, for the curious.
 - Training set (raw): [chankhavu/smolmo-sft-v2-seqlen64k](https://huggingface.co/datasets/chankhavu/smolmo-sft-v2-seqlen64k) — 2,813,055 examples, ~37.9 B tokens
 - Pre-tokenized (olmo-core) dataset the container downloads: [chankhavu/smolmo-sft-olmocore-pretokenized](https://huggingface.co/datasets/chankhavu/smolmo-sft-olmocore-pretokenized)
 - Base model: [allenai/Olmo-3.1-32B-Think](https://huggingface.co/allenai/Olmo-3.1-32B-Think)
-- Container definition: [olmo-sft-v2.2-allsm.def](https://github.com/hav4ik/aimo-olmo3-sft/blob/olmo-sft-32b/fields/olmo-sft-v2.2-allsm.def)
+- Container definition: [olmo-sft-32b-v2.def](https://github.com/hav4ik/aimo-olmo3-sft/blob/olmo-sft-32b/fields/olmo-sft-32b-v2.def)
 - Multi-node guide: [MULTINODE.md](../MULTINODE.md)
 </content>
