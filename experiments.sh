@@ -17,7 +17,7 @@ resolve_experiment() {
     # token_ids_part_*.npy / labels_mask_*.npy (sub). Add a case line per dataset you host.
     local sub
     case "$variant" in
-        cot)  ds="chankhavu/smolmo-proofs-cot-sft"; sub="olmocore" ;;
+        cot)  ds="chankhavu/smolmo-sft-olmocore-pretokenized"; sub="olmocore" ;;
         *) echo "[experiments] unknown variant '$variant' — add it to experiments.sh"; return 2 ;;
     esac
 

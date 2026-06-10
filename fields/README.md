@@ -23,7 +23,7 @@ The container writes everything — HF cache, base-model + dataset downloads, ch
 
 Run the experiment with the provided container `olmo-sft-v2.1-allsm.sif`. `/app/train.py` is the container's default entrypoint, so **`singularity run`** passes the flags straight to it (no `python /app/train.py` needed).
 
-> **Required topology vars.** The container needs four env vars set **explicitly** — `WORLD_SIZE` (number of nodes), `GLOBAL_RANK` (this node's 0-based index), `MASTER_ADDR`, `MASTER_PORT`. It never infers them, and under `--containall` the host env is **not** inherited, so pass them via `--env` (or `APPTAINERENV_*`). The single-node values are shown below; for a multi-node job see **[MULTINODE.md](../MULTINODE.md)** (the node count need not be a power of two — the global batch just has to divide across the data-parallel world: the 32B runs on 2/3/4 nodes, the 7B on 1/2/4/8).
+> **Required topology vars.** The container needs four env vars set **explicitly** — `WORLD_SIZE` (number of nodes), `GLOBAL_RANK` (this node's 0-based index), `MASTER_ADDR`, `MASTER_PORT`. It never infers them, and under `--containall` the host env is **not** inherited, so pass them via `--env` (or `APPTAINERENV_*`). The single-node values are shown below; for a multi-node job see **[MULTINODE.md](../MULTINODE.md)** (the node count need not be a power of two — both the 7B and 32B use the same 1.5M global batch, which runs on **2/3/4/6 nodes**).
 
 ```bash
 singularity run --nv --containall \

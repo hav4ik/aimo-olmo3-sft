@@ -28,10 +28,9 @@ topology before training.
    have to be a power of two — the container accepts any node count whose data-parallel world divides
    the global batch. At seq 65536 the context-parallel degree is `cp=4`, so
    `dp_world = nodes × 8 / cp = nodes × 2`, and the rule is **`global_batch % (nodes × 2) == 0`**.
-   - **32B (1,572,864-token batch): 2, 3, or 4 nodes** all divide cleanly → grad_accum 6 / 4 / 3.
-   - **7B (1,048,576-token batch): 1, 2, 4, or 8 nodes** → grad_accum 8 / 4 / 2 / 1. **3 nodes is NOT
-     valid for the 7B** (1,048,576 is not divisible by 6); the 7B's 1.05M batch only divides for
-     power-of-two node counts. (3 nodes works for the **32B** because 1.5M *is* divisible by 6.)
+   - **Both the 7B and 32B use the same 1,572,864-token (1.5M) global batch**, which divides cleanly for
+     **WORLD_SIZE 2, 3, 4, or 6 nodes** → grad_accum 6 / 4 / 3 / 2. (1 and 12 nodes also work; 5, 7, 8 do
+     not — `1,572,864 / (nodes × 2)` must be a whole multiple of the 65536 sequence length.)
 
    If a node-count / batch combination doesn't divide, the container **fails fast at startup** with a
    clear "pick a global batch that is a multiple of N" message — it never silently mis-shapes the run.

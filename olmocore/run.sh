@@ -61,8 +61,8 @@ MODEL_SIZE="${MODEL_SIZE:-7b}"
 # small MAX_STEPS=10).
 case "$MODEL_SIZE" in
     1b)  HF_MODEL="${HF_MODEL:-allenai/OLMo-2-0425-1B-Instruct}"; MODEL_ARCH="${MODEL_ARCH:-olmo2_1b_v2}"; DEF_LR=5e-5; DEF_GBS=4096;    DEF_KEEP=1; DEF_SFT=Olmo-2-1B-SFT-local.py;  DEF_SEQ_LEN=4096 ;;
-    7b)  HF_MODEL="${HF_MODEL:-allenai/Olmo-3-7B-Think}";    MODEL_ARCH="${MODEL_ARCH:-olmo3_7b}";  DEF_LR=5e-5; DEF_GBS=1048576; DEF_KEEP=2; DEF_SFT=Olmo-3-7B-SFT-local.py;  DEF_SEQ_LEN=65536 ;;
-    32b) HF_MODEL="${HF_MODEL:-allenai/Olmo-3.1-32B-Think}"; MODEL_ARCH="${MODEL_ARCH:-olmo3_32b}"; DEF_LR=5e-5; DEF_GBS=1572864; DEF_KEEP=1; DEF_SFT=Olmo-3-32B-SFT-local.py; DEF_SEQ_LEN=65536 ;;  # GBS 1.5M = 1572864 -> divides for 2/3/4 nodes (cp=4); lr 5e-5 sits between linear/sqrt scaling of AI2's 1e-4@4.19M
+    7b)  HF_MODEL="${HF_MODEL:-allenai/Olmo-3-7B-Think}";    MODEL_ARCH="${MODEL_ARCH:-olmo3_7b}";  DEF_LR=5e-5; DEF_GBS=1572864; DEF_KEEP=2; DEF_SFT=Olmo-3-7B-SFT-local.py;  DEF_SEQ_LEN=65536 ;;  # GBS 1.5M == 32B (divides for WORLD_SIZE 2/3/4/6 at cp=4)
+    32b) HF_MODEL="${HF_MODEL:-allenai/Olmo-3.1-32B-Think}"; MODEL_ARCH="${MODEL_ARCH:-olmo3_32b}"; DEF_LR=5e-5; DEF_GBS=1572864; DEF_KEEP=1; DEF_SFT=Olmo-3-32B-SFT-local.py; DEF_SEQ_LEN=65536 ;;  # GBS 1.5M = 1572864 -> divides for WORLD_SIZE 2/3/4/6 (cp=4); lr 5e-5 sits between linear/sqrt scaling of AI2's 1e-4@4.19M
     *)   echo "ERROR: MODEL_SIZE='$MODEL_SIZE' (want 1b|7b|32b)"; exit 2 ;;
 esac
 SFT_SCRIPT_NAME="${SFT_SCRIPT_NAME:-$DEF_SFT}"   # per-size SFT script basename; explicit env wins

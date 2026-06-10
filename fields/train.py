@@ -60,7 +60,7 @@ BAKED_CODE_ROOT = Path(os.environ.get("FIELDS_CODE_ROOT", "/app/code"))
 # The deterministic identity train.py pins so it can locate the trained checkpoint afterwards.
 RUN_USER = "fields"  # -> save_folder = {OLMO_SFT_SAVE_ROOT}/checkpoints/{RUN_USER}/olmo-sft/{run_name}
 BAKED_HF_HOME = "/tmp/olmo-sft/hf_cache"  # baked default (under /tmp, the always-bound dir); relocated under --workdir at runtime
-DEFAULT_DATASET_REPO = "chankhavu/smolmo-proofs-cot-sft"
+DEFAULT_DATASET_REPO = "chankhavu/smolmo-sft-olmocore-pretokenized"
 DEFAULT_DATASET_SUBDIR = "olmocore"
 DEFAULT_CODE_REPO_URL = "https://github.com/hav4ik/aimo-olmo3-sft"  # ONLY used when --pull-code is passed
 DEFAULT_CODE_REF = os.environ.get("FIELDS_CODE_REF", "olmo-sft-32b")
@@ -76,21 +76,25 @@ class Recipe:
     default_lr: float        # AI2 SFT learning rate for this size
     default_epochs: float = 1.0   # AI2 ships 2; we default 1 (override with --num-train-epochs 2)
     seq_len: int = 65536
-    default_global_batch: int = 0  # 0 => the CLI default (1,048,576 / AI2 7B). Small models set a smaller one.
+    default_global_batch: int = 0  # 0 => the recipe default; 7B AND 32B both set 1,572,864 (1.5M, divides
+    #                                 for WORLD_SIZE 2/3/4/6 at cp=4); 1b test sets 4096.
 
 
 RECIPES: dict[str, Recipe] = {
-    "olmo_7b_bf16": Recipe("7b", "bf16", "allenai/Olmo-3-7B-Think", 5e-5),
-    "olmo_7b_fp8": Recipe("7b", "fp8", "allenai/Olmo-3-7B-Think", 5e-5),
+    # 7B and 32B share the SAME 1.5M global batch (1,572,864) so one batch divides cleanly for WORLD_SIZE
+    # 2/3/4/6 at cp=4 (grad_accum 6/4/3/2) — no per-size confusion. (NB: the live 7B launched at 1.05M and
+    # is unaffected; 1.5M is the default for FUTURE 7B runs.)
+    "olmo_7b_bf16": Recipe("7b", "bf16", "allenai/Olmo-3-7B-Think", 5e-5, default_global_batch=1572864),
+    "olmo_7b_fp8": Recipe("7b", "fp8", "allenai/Olmo-3-7B-Think", 5e-5, default_global_batch=1572864),
     # LOCAL TEST: the real published Olmo-2 1B (Olmo-2 arch, native 4096 ctx). For exercising the full
     # pipeline (convert->train->convert->upload) on one small GPU — NOT a real recipe. run.sh maps size
     # "1b" to Olmo-2-1B-SFT-local.py + --model-arch olmo2_1b_v2. Small seq_len + global batch so it fits.
     "olmo_1b_bf16": Recipe("1b", "bf16", "allenai/OLMo-2-0425-1B-Instruct", 5e-5,
                            seq_len=4096, default_global_batch=4096),
-    # 32B: FURTHER SFT of allenai/Olmo-3.1-32B-Think. lr 5e-5 + 1M-token global batch (== the 7B recipe,
-    # by request — NOT AI2's 1e-4/4.19M). Uses Olmo-3-32B-SFT-local.py (= the 7B-local script with the
-    # olmo3_32B arch; AC/CP/DP stay env-tunable). default_global_batch=1,572,864 (1.5M) — the shape that
-    # divides cleanly for 2/3/4 nodes at cp=4 (grad_accum 6/4/3); needs the non-pow2 BatchSizeConfig in
+    # 32B: FURTHER SFT of allenai/Olmo-3.1-32B-Think. lr 5e-5 + 1.5M-token global batch (== the 7B recipe
+    # now — NOT AI2's 1e-4/4.19M). Uses Olmo-3-32B-SFT-local.py (= the 7B-local script with the olmo3_32B
+    # arch; AC/CP/DP stay env-tunable). default_global_batch=1,572,864 (1.5M) — the shape that divides
+    # cleanly for WORLD_SIZE 2/3/4/6 at cp=4 (grad_accum 6/4/3/2); needs the non-pow2 BatchSizeConfig in
     # Olmo-3-32B-SFT-local.py. lr 5e-5 sits between linear/sqrt scaling of AI2's 1e-4 @ 4.19M.
     "olmo_32b_bf16": Recipe("32b", "bf16", "allenai/Olmo-3.1-32B-Think", 5e-5, default_global_batch=1572864),
     "olmo_32b_fp8": Recipe("32b", "fp8", "allenai/Olmo-3.1-32B-Think", 5e-5, default_global_batch=1572864),
@@ -161,7 +165,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--global-batch-tokens", "--global_batch_tokens", dest="global_batch_tokens",
                    type=int, default=0,
                    help="Global batch in TOKENS. olmo-core derives cp_degree/rank-microbatch/grad-accum from "
-                        "this + seq_len + world_size. 0 => the recipe default (1,048,576 / AI2 7B; small for 1b).")
+                        "this + seq_len + world_size. 0 => the recipe default: 1,572,864 (1.5M) for both 7B "
+                        "and 32B (divides cleanly for WORLD_SIZE 2/3/4/6 at cp=4), 4096 for the 1b test.")
     p.add_argument("--seq-len", "--seq_len", dest="seq_len", type=int, default=0,
                    help="Max sequence length (0 => recipe default = 65536).")
     p.add_argument("--rank-microbatch-tokens", "--rank_microbatch_tokens", dest="rank_microbatch_tokens",
@@ -701,7 +706,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     recipe = RECIPES[args.experiment]
     seq_len = args.seq_len or recipe.seq_len
     # Global batch: explicit CLI wins; else the recipe's small default (1b); else the AI2 7B default.
-    args.global_batch_tokens = args.global_batch_tokens or recipe.default_global_batch or 1_048_576
+    args.global_batch_tokens = args.global_batch_tokens or recipe.default_global_batch or 1_572_864
 
     output = Path(args.output_path or args.output).resolve()
     workdir = Path(args.workdir).resolve()
