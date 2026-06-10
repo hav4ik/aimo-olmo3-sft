@@ -58,6 +58,33 @@ singularity exec --nv --containall \
 
 **If a run runs out of GPU memory (OOM):** the default `--olmo-ac-budget 0.4` uses ~85% of each H200's VRAM, so an OOM is unlikely — but if it happens, lower **`--olmo-ac-budget`**. That flag is the fraction of activation memory the model is allowed to *keep*: **`0.0` recomputes everything** (least VRAM, slightly slower) and **`1.0` keeps everything** (most VRAM). Step it **down** — `0.3`, `0.2`, … `0.0` — until the run fits; each step trades a little throughput for memory headroom.
 
+## Known risks & what to watch for
+
+A few failure modes are **environment-dependent** — they come from the shared **Lustre** filesystem or individual **node health**, not the container, so we can't fully eliminate them from our side. Here's what each looks like and what to do.
+
+> **The one health signal is the `[step=N/24099]` counter.** As long as it keeps advancing, the run is healthy — *even if* a scary-looking traceback appears in the **upload** log (see #3). A real hang is when the step counter **stops** and a `Watchdog caught collective operation timeout` follows.
+
+**1. Cold-compile crash on a flaky node — Triton/Inductor compiling on Lustre.** The very first training step runs a one-time `torch.compile` that builds GPU/host kernels (Triton + Inductor) and writes them to a per-node compile cache under the workdir — which sits on shared Lustre. Compiling and linking those `.so` files on a networked filesystem is inherently fragile; on a node with a flaky or congested Lustre client, `gcc` can fault mid-build.
+- **Symptom (before step 1, in the first minutes):** `InductorError: CalledProcessError: Command '[... gcc ... cuda_utils.c ...]' died with <Signals.SIGABRT: 6>` (or a similar Triton/Inductor compile error).
+- **What we already handled:** the container ships its **own** complete CUDA/C toolchain (nvcc + gcc + linker), first on `PATH`, so it never resolves a host compiler — the `PermissionError: nvcc` failure class that crashed the earlier image is **fixed and re-verified**. The residual is a *node-local* filesystem/compiler fault during the live build — the node's, not the container's.
+- **What to do:** **relaunch the identical command.** The compile cache is per-node namespaced, so it recompiles cleanly and nothing is lost (this is before any checkpoint). **If it reproduces on the same physical node, that node is unhealthy — exclude it and use a different one.**
+
+**2. NCCL timeout on the cold base-model load — rare, Lustre-speed dependent.** At startup every rank reads the ~121 GB base checkpoint from Lustre; that collective read has a 15-minute timeout. We measured this load at **~100 s** on a slow instance, so it normally has a large margin — but a pathologically congested Lustre during the cold read could exceed it.
+- **Symptom (before step 1):** `Watchdog caught collective operation timeout` shortly after `Loading checkpoint from '.../base-distcp'`.
+- **What to do:** relaunch (a warm Lustre cache reads faster). If it persists across relaunches, the cluster's Lustre is saturated during the cold read.
+
+**3. A scary `CheckpointException` in the *upload* log — BENIGN, not a crash.** A background process converts each checkpoint and ships it to HuggingFace in parallel with training. Occasionally it begins converting a checkpoint that the retention logic rotates away mid-read, producing a `CRITICAL` traceback **in the upload path** — while training carries on untouched.
+- **Symptom:** `CRITICAL Uncaught CheckpointException ... FileNotFoundError: ... __X_0.distcp` in the log — **but the `[step=N]` counter advances right past it.**
+- **What it means:** the background **uploader** retried a checkpoint that rotated; it self-recovers on the next poll. **Do not kill the run for this.** Rule of thumb: a `CheckpointException` / `FileNotFoundError` in the *convert/upload* path is benign; only a `Watchdog ... collective operation timeout` that *stops the step counter* is a real hang.
+
+**4. Multi-node: a single dead node hangs the survivors.** If one node dies (hardware/NCCL), the others block on the next collective until the watchdog fires (~10–30 min); the launch uses static rendezvous, so there is no automatic restart.
+- **Symptom:** the `[step=N]` counter stops advancing for >30 min, then `Watchdog caught collective operation timeout` on the surviving nodes.
+- **What to do:** **kill all nodes and relaunch the identical command** — the trainer auto-resumes from the latest checkpoint in the shared save folder (at most ~250 steps lost). `--env NCCL_DEBUG=INFO` helps pinpoint the dead rank.
+
+**5. Slow HuggingFace upload — intermediate snapshots only.** On a slow uplink the per-checkpoint upload (~64 GB) may exceed its 90-minute budget and be killed before it lands, so the *live* intermediate snapshots may not appear. The **final** end-of-run upload is **uncapped**, so the deliverable always ships regardless.
+- **Symptom:** `upload subprocess exceeded 5400s and was killed (will retry next poll)`, and no `chankhavu/olmo_32b_fp8_..._step<N>` repos appear during the run.
+- **What to do:** raise the budget — add `--env FIELDS_UPLOAD_TIMEOUT=21600` (6 h). Training is unaffected either way.
+
 ## Advanced
 
 ### Explicit directories
