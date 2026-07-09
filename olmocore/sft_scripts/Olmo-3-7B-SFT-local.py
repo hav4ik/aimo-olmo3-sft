@@ -521,6 +521,15 @@ class SFTConfig(Config):
             model_overrides["dtype"] = (
                 DType.bfloat16 if os.environ["OLMO_MODEL_DTYPE"] == "bfloat16" else DType.float32
             )
+        # OLMO_USE_SINK=1 adds a per-head learnable attention sink (gpt-oss style) to every layer.
+        # Requires the FA2 backend (run.sh forces flash_2 when this is set); composes with Ulysses CP
+        # (OLMO_CP_STYLE=ulysses) but NOT ring. OLMO_SINK_INIT sets the initial per-head logit: 0.0 =
+        # gpt-oss default; use a strongly negative value (e.g. -10.0) to warm-start from a checkpoint
+        # trained WITHOUT sinks so step 0 is ~a no-op. (A sink-baked HF checkpoint round-trips through
+        # the distcp converter, so warm-starting from measured sinks needs no flag beyond use_sink.)
+        if os.environ.get("OLMO_USE_SINK") == "1":
+            model_overrides["use_sink"] = True
+            model_overrides["sink_init"] = float(os.environ.get("OLMO_SINK_INIT", "0.0"))
         model = TransformerConfig.olmo3_7B(
             vocab_size=tokenizer_config.padded_vocab_size(),
             **model_overrides,

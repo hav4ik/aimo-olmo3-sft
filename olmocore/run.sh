@@ -154,12 +154,15 @@ if [ "$PRECISION" = "fp8" ]; then
     esac
 fi
 case "$GPU_CC" in 9.*) DEFATTN=flash_3 ;; *) DEFATTN=flash_2 ;; esac
-# Ring context parallelism (our default, auto-engaged once seq_len exceeds the ~16384-tok/rank cap) is
-# implemented ONLY on the FA2 backend — FlashAttention3 raises "doesn't support ring context
-# parallelism". So when CP will engage with ring, force FA2 even on sm_90/H200 (FA3's Hopper speedup is
-# moot once CP is required). FA3 stays the default only for short-context (no-CP) runs, e.g. smokes.
-if [ "${SEQ_LEN:-65536}" -gt "${OLMO_MAX_TOKENS_PER_RANK:-16384}" ] && [ "${OLMO_CP_STYLE:-ring}" = "ring" ]; then
-    DEFATTN=flash_2   # CP engages (seq_len exceeds the per-rank cap) with ring -> FA2. At cp=1 (cap>=seq_len) FA3 stays.
+# Long-context / sink runs go on FA2:
+#  - ring CP is FA2-only (FA3 raises "doesn't support ring context parallelism");
+#  - Ulysses CP works on FA3 too, but this image standardizes the 128K path on FA2 (per the goal);
+#  - attention sinks (OLMO_USE_SINK=1) are implemented ONLY on the FA2 backend — FA3/FA4/TE raise.
+# So force FA2 (even on sm_90/H200) whenever CP will engage (seq_len exceeds the ~16384-tok/rank cap,
+# regardless of ring|ulysses) OR sinks are on. FA3 stays the default only for short-context, no-CP,
+# no-sink runs (e.g. smokes) on Hopper.
+if [ "${SEQ_LEN:-65536}" -gt "${OLMO_MAX_TOKENS_PER_RANK:-16384}" ] || [ "${OLMO_USE_SINK:-0}" = "1" ]; then
+    DEFATTN=flash_2
 fi
 # 1b LOCAL TEST ONLY (does NOT affect 7b/32b): default to the SDPA/torch attention backend — it needs no
 # special kernel, so it runs on ANY GPU incl. Ampere sm_86 (RTX 3090) where our FA2 build has no kernel.
@@ -250,7 +253,7 @@ RDZV=(--nnodes="$NNODES" --node_rank="$NODE_RANK"
 # process-level RANK/WORLD_SIZE torchrun sets for each worker.
 unset RANK WORLD_SIZE GLOBAL_RANK LOCAL_RANK 2>/dev/null || true
 
-echo "[olmocore] $PRECISION | ${NNODES}x${NPROC} GPU cc=$GPU_CC | attn=$OLMO_ATTN_BACKEND | cp=${OLMO_CP_STYLE:-ring} | ac=${OLMO_AC_BUDGET:-selected_ffn} | fp8=${OLMO_FP8:-off}${OLMO_FP8_FSDP_ALLGATHER:+/ag} | optim=$OLMO_OPTIM | ckpt=${OLMO_SAVE_INTERVAL:-1000}/${OLMO_EPHEMERAL_INTERVAL:-500}/keep${OLMO_KEEP_LAST_CKPTS} | node ${NODE_RANK}/${NNODES} | $DUR_VAL $DUR_UNIT"
+echo "[olmocore] $PRECISION | ${NNODES}x${NPROC} GPU cc=$GPU_CC | attn=$OLMO_ATTN_BACKEND | cp=${OLMO_CP_STYLE:-ring} | sink=${OLMO_USE_SINK:-0}${OLMO_USE_SINK:+@${OLMO_SINK_INIT:-0.0}} | ac=${OLMO_AC_BUDGET:-selected_ffn} | fp8=${OLMO_FP8:-off}${OLMO_FP8_FSDP_ALLGATHER:+/ag} | optim=$OLMO_OPTIM | ckpt=${OLMO_SAVE_INTERVAL:-1000}/${OLMO_EPHEMERAL_INTERVAL:-500}/keep${OLMO_KEEP_LAST_CKPTS} | node ${NODE_RANK}/${NNODES} | $DUR_VAL $DUR_UNIT"
 # Size-specific SFT script (local copy of AI2's, beaker-stubbed). Resolved per MODEL_SIZE via the table
 # above (DEF_SFT): 7b/32b -> Olmo-3-{7B,32B}-SFT-local.py (olmo3 long-context); 1b -> Olmo-2-1B-SFT-local.py
 # (Olmo-2 1B local test path). Each size's MODEL_ARCH/HF_MODEL is set in the same table, so they stay in sync.
