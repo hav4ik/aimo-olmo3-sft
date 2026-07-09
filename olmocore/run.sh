@@ -154,13 +154,14 @@ if [ "$PRECISION" = "fp8" ]; then
     esac
 fi
 case "$GPU_CC" in 9.*) DEFATTN=flash_3 ;; *) DEFATTN=flash_2 ;; esac
-# Long-context / sink runs go on FA2:
+# Long-context / sink runs default to FA2:
 #  - ring CP is FA2-only (FA3 raises "doesn't support ring context parallelism");
 #  - Ulysses CP works on FA3 too, but this image standardizes the 128K path on FA2 (per the goal);
-#  - attention sinks (OLMO_USE_SINK=1) are implemented ONLY on the FA2 backend — FA3/FA4/TE raise.
+#  - attention sinks (OLMO_USE_SINK=1) work on BOTH flash_2 and flash_3 (FA4/TE raise); we default
+#    sink runs to flash_2 per the goal, but FA3+sink is available via OLMO_ATTN_BACKEND=flash_3.
 # So force FA2 (even on sm_90/H200) whenever CP will engage (seq_len exceeds the ~16384-tok/rank cap,
-# regardless of ring|ulysses) OR sinks are on. FA3 stays the default only for short-context, no-CP,
-# no-sink runs (e.g. smokes) on Hopper.
+# regardless of ring|ulysses) OR sinks are on — unless the caller pins OLMO_ATTN_BACKEND (it wins
+# below). FA3 stays the default only for short-context, no-CP, no-sink Hopper runs.
 if [ "${SEQ_LEN:-65536}" -gt "${OLMO_MAX_TOKENS_PER_RANK:-16384}" ] || [ "${OLMO_USE_SINK:-0}" = "1" ]; then
     DEFATTN=flash_2
 fi

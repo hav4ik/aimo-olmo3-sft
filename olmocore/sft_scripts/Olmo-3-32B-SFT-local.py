@@ -526,12 +526,14 @@ class SFTConfig(Config):
             model_overrides["dtype"] = (
                 DType.bfloat16 if os.environ["OLMO_MODEL_DTYPE"] == "bfloat16" else DType.float32
             )
-        # OLMO_USE_SINK=1 adds a per-head learnable attention sink (gpt-oss style) to every layer.
-        # Requires the FA2 backend (run.sh forces flash_2 when this is set); composes with Ulysses CP
-        # (OLMO_CP_STYLE=ulysses) but NOT ring. OLMO_SINK_INIT sets the initial per-head logit: 0.0 =
-        # gpt-oss default; use a strongly negative value (e.g. -10.0) to warm-start from a checkpoint
-        # trained WITHOUT sinks so step 0 is ~a no-op. (A sink-baked HF checkpoint round-trips through
-        # the distcp converter, so warm-starting from measured sinks needs no flag beyond use_sink.)
+        # OLMO_USE_SINK=1 adds a per-head learnable attention sink to every layer (ported from the
+        # olmo3_sink fork's fa3_sink.py: an exact re-normalization of flash's (out, softmax_lse)).
+        # Works on the flash_2 AND flash_3 backends (the long-context path defaults to flash_2; set
+        # OLMO_ATTN_BACKEND=flash_3 for FA3). Composes with Ulysses CP (OLMO_CP_STYLE=ulysses) but NOT
+        # ring. OLMO_SINK_INIT sets the initial per-head logit: 0.0 = from-scratch; a strongly negative
+        # value (e.g. -10.0) warm-starts from a checkpoint trained WITHOUT sinks (step 0 ~ no-op). When
+        # warm-starting from a sink-baked HF checkpoint, the measured sinks round-trip through the
+        # distcp converter automatically, so only use_sink is needed (leave OLMO_SINK_INIT unset).
         if os.environ.get("OLMO_USE_SINK") == "1":
             model_overrides["use_sink"] = True
             model_overrides["sink_init"] = float(os.environ.get("OLMO_SINK_INIT", "0.0"))
