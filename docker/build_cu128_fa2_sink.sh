@@ -50,8 +50,10 @@ docker build -f "${REPO_ROOT}/docker/base/Dockerfile.olmo-core-sft" \
     -t "${SFT_TAG}" "${REPO_ROOT}/docker/base/"
 
 echo "==> [3/3] + runtime bootstrap -> ${DEPLOY_TAG}"
+# VERIFY_CUDA_MAX=12.8 bakes a hard gate: the build FAILS if any package pulls CUDA 12.9 / 13.0.
 docker build -f "${REPO_ROOT}/docker/Dockerfile.olmocore" \
     --build-arg BASE="${SFT_TAG}" \
+    --build-arg VERIFY_CUDA_MAX=12.8 \
     -t "${DEPLOY_TAG}" "${REPO_ROOT}"
 
 cat <<EOF

@@ -30,6 +30,16 @@ RUN pip install --no-cache-dir "ring-flash-attn>=0.1.7" \
  && echo "from transformers.utils import is_flash_attn_greater_or_equal_2_10  # shim: ring_flash_attn hf_adapter on transformers 5.x" >> "$F" \
  && python -c "import ring_flash_attn; print('ring-flash-attn OK')"
 
+# Hard CUDA ceiling for the cu128 build: fail the build if ANY installed package pulls CUDA > 12.8
+# (a 12.9 or 13.0 transitive dep). Gated by build-arg so the cu130 production build is unaffected
+# (default empty = skip). The cu128 chain passes VERIFY_CUDA_MAX=12.8 (see build_cu128_fa2_sink.sh).
+ARG VERIFY_CUDA_MAX=
+COPY docker/verify_cuda_max.py /usr/local/bin/verify_cuda_max.py
+RUN if [ -n "${VERIFY_CUDA_MAX}" ]; then \
+        echo "[verify] enforcing CUDA <= ${VERIFY_CUDA_MAX}"; \
+        python /usr/local/bin/verify_cuda_max.py --max "${VERIFY_CUDA_MAX}"; \
+    else echo "[verify] VERIFY_CUDA_MAX unset — skipping CUDA ceiling check"; fi
+
 # Code is cloned into the mounted run storage at runtime (single source = the git ref); pin a run
 # with CODE_REF=<branch|tag|commit>. CODE_DIR must live on a writable mount (the bound /data/training).
 ENV CODE_REPO=https://github.com/hav4ik/aimo-olmo3-sft \
