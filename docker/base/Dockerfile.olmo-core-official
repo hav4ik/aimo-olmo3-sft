@@ -56,10 +56,11 @@ RUN TORCH_CUDA_ARCH_LIST="9.0 10.0" GROUPED_GEMM_CUTLASS="1" pip install --no-bu
 
 # Install flash-attn 2
 ARG FLASH_ATTN_VERSION=2.8.2
-# LOCAL EDIT (upstream is "90;100"): add sm_120 so FA2 also covers WORKSTATION
-# Blackwell (RTX PRO 6000 / RTX 5090), not just Hopper (90) + datacenter B200 (100).
-# One image then runs flash on H100/H200 + B200 + RTX PRO 6000. Overridable via build-arg.
-ARG FLASH_ATTN_CUDA_ARCHS="90;100;120"
+# LOCAL EDIT (upstream is "90;100"): add sm_120 (WORKSTATION Blackwell: RTX PRO 6000 / RTX 5090)
+# and sm_86 (Ampere: RTX 3090, for LOCAL dev/testing), on top of Hopper (90) + datacenter B200 (100).
+# One source-built FA2 then covers H100/H200 + B200 + RTX PRO 6000 + 3090. CUDA 12.8 nvcc supports
+# all of sm_86/90/100/120, so this compiles on the cu128 devel base. Overridable via build-arg.
+ARG FLASH_ATTN_CUDA_ARCHS="86;90;100;120"
 RUN FLASH_ATTN_CUDA_ARCHS="${FLASH_ATTN_CUDA_ARCHS}" pip install --no-build-isolation --no-cache-dir flash-attn==${FLASH_ATTN_VERSION}
 
 # Install flash-attn 3.
@@ -104,10 +105,13 @@ RUN if [ -n "${QUACK_VERSION}" ]; then \
     pip install --no-build-isolation --no-cache-dir quack-kernels==${QUACK_VERSION}; fi
 
 # Install direct dependencies, but not source code.
-COPY pyproject.toml .
-COPY src/olmo_core/__init__.py src/olmo_core/__init__.py
-COPY src/olmo_core/version.py src/olmo_core/version.py
-RUN pip install --no-cache-dir '.[all]' && \
+# OLMO_EXTRAS selects the pyproject extras. Default "all" reproduces the upstream image.
+# For the CUDA-12.8 / FA2 deploy we pass the full set MINUS "fa4" (flash-attn-4 is a
+# Blackwell/CUTE beta that pulls newer-CUDA build requirements and is not used at runtime —
+# training uses FA2, inference-on-Hopper can use the FA3 built above):
+#   OLMO_EXTRAS="dev,beaker,comet,dion,eval,fla,torchao,transformers,wandb"
+ARG OLMO_EXTRAS=all
+RUN pip install --no-cache-dir ".[${OLMO_EXTRAS}]" && \
     pip uninstall -y ai2-olmo-core && \
     rm -rf *
 
