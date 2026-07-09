@@ -115,9 +115,14 @@ if [ "${STAGE:-train}" = "convert" ] || [ ! -f "$CONVERT_DONE" ]; then
             echo "[olmocore] staging HF model $HF_MODEL -> $CONV_SRC"
             hf_retry hf download "$HF_MODEL" --local-dir "$CONV_SRC"
         fi
+        # Attention sink: build the OLMo-core model WITH sinks so a sink-baked HF checkpoint
+        # (self_attn.sinks) converts, and pre-fill sinks to OLMO_SINK_INIT for a stock warm-start.
+        # Must match OLMO_USE_SINK at TRAIN time so the distcp <-> model params line up.
+        SINK_CONV_ARGS=()
+        [ "${OLMO_USE_SINK:-0}" = "1" ] && SINK_CONV_ARGS=(--use-sink --sink-init "${OLMO_SINK_INIT:-0.0}")
         python /workspace/OLMo-core/src/examples/huggingface/convert_checkpoint_from_hf.py \
             --checkpoint-input-path "$CONV_SRC" --model-arch "${MODEL_ARCH:-olmo3_7b}" \
-            --tokenizer dolma2 --output-dir "$CKPT_DIR" --skip-validation
+            --tokenizer dolma2 --output-dir "$CKPT_DIR" --skip-validation "${SINK_CONV_ARGS[@]}"
         touch "$CONVERT_DONE"
         echo "[olmocore] convert complete ($CONVERT_DONE)"
     else
