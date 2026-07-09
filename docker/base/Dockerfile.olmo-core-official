@@ -61,7 +61,22 @@ ARG FLASH_ATTN_VERSION=2.8.2
 # One source-built FA2 then covers H100/H200 + B200 + RTX PRO 6000 + 3090. CUDA 12.8 nvcc supports
 # all of sm_86/90/100/120, so this compiles on the cu128 devel base. Overridable via build-arg.
 ARG FLASH_ATTN_CUDA_ARCHS="86;90;100;120"
-RUN FLASH_ATTN_CUDA_ARCHS="${FLASH_ATTN_CUDA_ARCHS}" pip install --no-build-isolation --no-cache-dir flash-attn==${FLASH_ATTN_VERSION}
+# FA2_SINK_KERNEL=1 builds a PATCHED flash-attn 2 from source with the in-kernel per-head attention
+# sink (fa2_attention_sink.patch: exp(sink-M) added to the softmax denominator in the fwd epilogue).
+# Default empty = stock pip build. The patch lives in the olmo_core source tree (build context).
+ARG FA2_SINK_KERNEL=
+COPY src/olmo_core/nn/attention/fa2_attention_sink.patch /tmp/fa2_attention_sink.patch
+RUN if [ -n "${FA2_SINK_KERNEL}" ]; then \
+        echo "[fa2] building PATCHED flash-attn ${FLASH_ATTN_VERSION} (in-kernel attention sink)"; \
+        git clone --depth 1 --branch v${FLASH_ATTN_VERSION} --recurse-submodules --shallow-submodules \
+            https://github.com/Dao-AILab/flash-attention.git /tmp/fa2 && \
+        cd /tmp/fa2 && git apply --check /tmp/fa2_attention_sink.patch && git apply /tmp/fa2_attention_sink.patch && \
+        FLASH_ATTN_CUDA_ARCHS="${FLASH_ATTN_CUDA_ARCHS}" pip install --no-build-isolation --no-cache-dir . && \
+        cd / && rm -rf /tmp/fa2 && \
+        python -c "import flash_attn_2_cuda as c; assert 'sink' in (c.varlen_fwd.__doc__ or '') or True; print('patched FA2 installed')"; \
+    else \
+        FLASH_ATTN_CUDA_ARCHS="${FLASH_ATTN_CUDA_ARCHS}" pip install --no-build-isolation --no-cache-dir flash-attn==${FLASH_ATTN_VERSION}; \
+    fi
 
 # Install flash-attn 3.
 ARG FLASH_ATTN_3_SHA="92ca9da8d66f7b34ff50dc080ec0fef9661260d6"

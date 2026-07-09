@@ -33,12 +33,16 @@ NO_FA4_EXTRAS="dev,beaker,comet,dion,eval,fla,torchao,transformers,wandb"
 
 echo "==> [1/3] deps base ${BASE_TAG}  (context=${OLMO_CORE_DIR})"
 [ -f "${OLMO_CORE_DIR}/pyproject.toml" ] || { echo "!! ${OLMO_CORE_DIR}/pyproject.toml missing; set OLMO_CORE_DIR"; exit 1; }
+# FA2_SINK_KERNEL=1 builds a PATCHED flash-attn 2 (in-kernel attention sink) instead of the stock
+# wheel. Opt-in (slower build); the exact post-processing sink works on stock FA2 without it. At
+# runtime set OLMO_FA2_SINK_KERNEL=1 to actually use the in-kernel path.
 docker build -f "${REPO_ROOT}/docker/base/Dockerfile.olmo-core-official" \
     --build-arg CUDA_VERSION=12.8.1 \
     --build-arg CUDA_VERSION_PATH=cu128 \
     --build-arg TORCH_VERSION=2.10.0 \
     --build-arg FLASH_ATTN_CUDA_ARCHS="86;90;100;120" \
     --build-arg OLMO_EXTRAS="${NO_FA4_EXTRAS}" \
+    --build-arg FA2_SINK_KERNEL="${FA2_SINK_KERNEL:-}" \
     -t "${BASE_TAG}" "${OLMO_CORE_DIR}"
 
 echo "==> [2/3] + olmo_core source (${OLMO_CORE_REF}) -> ${SFT_TAG}"
