@@ -25,6 +25,18 @@ Image: `chankhavu/olmo3-olmocore:cu128-fa2-sink`.
 The sink mechanism, all-to-all Ulysses CP, and the cu128 base are all upstream-compatible
 additions; the cu130 build path is unchanged (the Dockerfile knobs default to the old behavior).
 
+### CUDA 12.8 is a hard requirement (enforced)
+
+The image runs on a **CUDA-12.8-only host** — a cu130 (CUDA 13 runtime) image would not even launch
+against a 12.8 driver, and a stray 12.9 lib risks the same. The build therefore enforces a ceiling:
+`docker/verify_cuda_max.py` runs at build time (baked into `Dockerfile.olmocore`, gated by
+`--build-arg VERIFY_CUDA_MAX=12.8`, which `build_cu128_fa2_sink.sh` passes) and **fails the build**
+if any installed package pulls CUDA > 12.8 — `torch.version.cuda > 12.8`, any `-cu13` wheel, or a
+CUDA-versioned `nvidia-*-cu12` lib at 12.9+. cuDNN/NCCL (independent versioning) are exempt from the
+numeric check but still caught if they are `-cu13`. The cu130 production build is unaffected (the
+gate is off when `VERIFY_CUDA_MAX` is unset). The base recipe's own defaults are already cu128 (AI2's
+tested config), so the build is expected to pass clean; the gate is the guarantee.
+
 ---
 
 ## Build (run this yourself — GPU toolchain + `docker login`)
