@@ -63,10 +63,24 @@ Constraints checked/satisfied for 128K:
 
 Stock Olmo-3 was trained without sinks. `OLMO_SINK_INIT=-10.0` makes each sink a near no-op at
 step 0 (`o_sink ≈ o`), so training starts ~identical to native Olmo-3 and learns the sink in.
-`0.0` matches the gpt-oss reference (from-scratch). If you warm-start from a **sink-baked** HF
-checkpoint (measured `s_aux` written into the weights), the distcp converter maps
+`0.0` = from-scratch. If you warm-start from a **sink-baked** HF checkpoint (measured `s_aux` in
+the weights — e.g. from the olmo3_sink fork's `build_init_model.py`), the distcp converter maps
 `self_attn.sinks` → `attention.sinks` automatically — just set `OLMO_USE_SINK=1` and the measured
-values load (no `OLMO_SINK_INIT` needed).
+values load (leave `OLMO_SINK_INIT` unset).
+
+### Resuming a partially-trained sink checkpoint (HF → distcp)
+
+For a checkpoint you already trained WITH sinks (HF format, has `self_attn.sinks`), set
+`OLMO_USE_SINK=1` and point `HF_MODEL` at it. `run.sh` then passes `--use-sink` to the converter
+(`convert_checkpoint_from_hf.py`), which builds the olmo-core model *with* the `sinks` param so the
+mapping fills it. Both convert-time and train-time models carry sinks, so the distcp ↔ model params
+line up. Requirements/notes:
+- The HF `config.json` `model_type` must resolve to the olmo3 arch mapping. If it's `olmo3_sink`
+  (trust_remote_code), pass `--model-arch olmo3_32b` (run.sh already does) — the converter keys off
+  `--model-arch`, not the HF `model_type`, so the olmo3 sink mapping is used.
+- head_dim 128 (÷8) satisfies the sink post-correction requirement.
+- To sanity-check the conversion with a logit-parity forward, run the convert **without**
+  `--skip-validation` (it uses the eager sink on the torch backend).
 
 ---
 
@@ -86,26 +100,36 @@ returns the **exact** `dq/dk/dv` for sink attention; the closed-form `dsink` is 
 correction is exact per head (the sink is sliced to the rank's contiguous head block). See
 `OLMo-core/src/olmo_core/nn/attention/attention_sink.py`.
 
-**Backend support:** FA2 only (unpacked + packed, non-CP + Ulysses CP). **Ring CP + sink** raises
-(ring's lse is incremental across ranks). **FA3/FA4/TE/torch** reject sink. **TP + sink** raises
-(use FSDP + Ulysses).
+**Backend support:** **flash_2** (unpacked + packed, non-CP + Ulysses) and **flash_3** (varlen;
+non-CP + Ulysses) — same exact post-correction, since FA3's varlen also returns `softmax_lse`. The
+**torch** backend has an eager sink (`eager_sink_attention`, the convert-validation / 1b / CPU path).
+**Ring CP + sink** raises (ring's lse is incremental across ranks). **FA4/TE** reject sink. **TP +
+sink** raises (use FSDP + Ulysses). Dense (non-varlen) FA3 + sink raises (SFT always uses varlen).
 
 ---
 
 ## Verified vs. to-verify
 
-**Verified locally (RTX 3090, torch 2.11):**
-- Sink math — forward, `dsink`, and the dq/dk/dv identity vs an eager reference (fp32 + bf16):
-  `OLMo-core/src/test/nn/attention/attention_sink_test.py`.
+**Verified locally (RTX 3090, torch 2.11):** `OLMo-core/src/test/nn/attention/attention_sink_test.py`
+- Sink math — forward, `dsink`, and the dq/dk/dv identity vs an eager reference (fp32 + bf16).
+- **Eager path numerical correctness** (non-circular): `eager_sink_attention` vs the independent
+  re-normalization identity `o_nosink · 1/(1+exp(sink−lse))` → fp32 max|Δ| **3.6e-7**; plus the
+  no-sink limit (sink→−∞ recovers plain attention) = 0.0.
 - HF↔distcp sink conversion round-trip (upload, sink-baked warm-start, stock no-sink — no errors).
-- Preset → model wiring: `olmo3_7B(use_sink=True, sink_init=-10.0)` materializes
-  `blocks.{i}.attention.sinks[n_heads]`, `init_weights` fills `sink_init`.
+- Preset/convert → model wiring: `olmo3_*(use_sink=True, sink_init=…)` materializes
+  `blocks.{i}.attention.sinks[n_heads]`; convert `--use-sink` builds the sink model + pre-fills init.
 - cu128 torch 2.10 wheels exist; `OLMO_EXTRAS` (all − fa4) matches `pyproject`'s `all`.
 
-**Must verify on the build/GPU box (needs flash-attn / multi-GPU / the built image):**
-- The FA2 kernel path end-to-end (no `flash_attn` on the dev box).
-- Multi-GPU Ulysses cp=8 at 128K with sinks.
-- The full image build + `import torch, flash_attn, ring_flash_attn` sanity (see build script tail).
+**Run on a GPU with flash-attn (H100 for FA3) — the in-kernel test:**
+`OLMo-core/src/test/nn/attention/attention_sink_flash_test.py` exercises the REAL FA2/FA3 kernels
+with a sink and checks forward + dq/dk/dv/dsink vs the eager reference (skips where flash/Hopper
+absent). `python src/test/nn/attention/attention_sink_flash_test.py` or `pytest … -s`.
+
+**Still to verify on the build/GPU box:**
+- The above in-kernel test actually passing on FA2 (container/3090) and FA3 (H100).
+- Multi-GPU Ulysses cp=8 at 128K with sinks (single-process cp=1 is covered by the head-slice unit test).
+- Full image build + `import torch, flash_attn, ring_flash_attn` sanity (see build script tail).
+- Converting your partially-trained 32B sink checkpoint (`OLMO_USE_SINK=1`, `HF_MODEL=<it>`).
 
 ## Known caveats
 
