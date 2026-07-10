@@ -229,3 +229,30 @@ python /usr/local/bin/train.py --seq-len 131072 --max-tokens-per-rank 8192 \
 **65K without CP** (teammate's H200 shape, ported): shard over all GPUs, `--cp-style` cp=1
 (`--max-tokens-per-rank ≥ seq_len`), `OLMO_NODES_PER_FSDP_GROUP=<#nodes>`. Simpler — no Ulysses, no
 sink-CP interaction. 128K needs CP regardless (no-CP activations exceed 80 GB).
+
+---
+
+## Running on AI2 Beaker
+
+The image runs on Beaker as a custom Docker image. **Omit `command:`** in the spec so Beaker runs the
+image's ENTRYPOINT (`bootstrap.sh`) as-is — it clones the recipe and downloads model+data at runtime
+(Beaker jobs have outbound network). `bootstrap.sh` auto-maps Beaker's rendezvous env, so **you set
+nothing extra for multi-node**:
+
+| Beaker injects | mapped to |
+|---|---|
+| `BEAKER_REPLICA_COUNT` | `WORLD_SIZE` (#nodes) |
+| `BEAKER_REPLICA_RANK` | `GLOBAL_RANK` (node index) |
+| `BEAKER_LEADER_REPLICA_HOSTNAME` | `MASTER_ADDR` |
+
+Single-node = `resources.gpuCount: 8`. Multi-node = `replicas: N` + **`leaderSelection: true`** +
+`hostNetworking: true` + `propagateFailure/Preemption: true` (leaderSelection is required or the leader
+hostname is unset and torchrun can't rendezvous — `bootstrap.sh` warns if so). Tuning knobs go in
+`envVars` as their `OLMO_*` form (e.g. `{name: OLMO_NODES_PER_FSDP_GROUP, value: "4"}`).
+
+- **Storage:** mount a WEKA bucket **read-write** at `/data/training` (`datasets: [{mountPath:
+  /data/training, source: {weka: <bucket>}}]`) — that's where checkpoints land and persist. Don't use
+  result-datasets for the ~251 GB distcp checkpoints; `result.path` is for small logs only.
+- **Secrets:** `beaker secret write HF_TOKEN …`, then `envVars: [{name: HF_TOKEN, secret: HF_TOKEN}]`.
+- **Cluster:** target H100 (sm_90) — the image supports it. Multi-node throughput needs InfiniBand
+  user-space drivers in the image (TODO; else NCCL falls back to Ethernet ~6× slower).
