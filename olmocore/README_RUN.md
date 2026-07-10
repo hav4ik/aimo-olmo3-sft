@@ -41,9 +41,11 @@ no separate convert step.
 ./olmocore/launch.sh --data /DATA/olmo-run --seq-len 128 --max-steps 10 --gbs 1024 --max-tokens-per-rank 128
 ```
 
-**Real run** (drop the smoke overrides; set the real recipe):
+**Real run** (drop the smoke overrides; set the real recipe). Use the default **ring** CP —
+`--cp-style ulysses` is known-broken for this config (device-side index assert: Ulysses passes
+full-sequence `cu_doc_lens` into a per-rank-sharded tensor). See docs/attention-sink-lifecycle.md.
 ```bash
-./olmocore/launch.sh --data /DATA/olmo-run --seq-len 65536 --epochs 2 --cp-style ulysses
+./olmocore/launch.sh --data /DATA/olmo-run --seq-len 65536 --epochs 2 --max-tokens-per-rank 16384
 ```
 
 Defaults are already this model (`chankhavu/yccchen-olmo3-deploy`, its deepseek tokenizer + YaRN, and

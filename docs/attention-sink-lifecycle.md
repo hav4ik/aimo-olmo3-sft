@@ -119,7 +119,16 @@ training bug (the real `--seq-len 65536` run has completion tokens). Fixes:
 
 - Smoke at a larger length so completions appear, e.g. `--seq-len 4096` (and raise `--gbs` so each rank
   gets ≥2 sequences), or
-- Go straight to the real run: `--seq-len 65536 --epochs 2 --max-tokens-per-rank 16384 --cp-style ulysses`.
+- Go straight to the real run: `--seq-len 65536 --epochs 2 --max-tokens-per-rank 16384` (ring CP — see below).
 
 To isolate a *real* forward NaN from the masking artifact: rerun the smoke with `--sink 0`. If the NaN
 persists it's not the sinks (batch/data/precision); if it clears, investigate the loaded sinks.
+
+## Known pitfall: Ulysses CP device-side index assert — use ring
+
+`--cp-style ulysses` (`OLMO_CP_STYLE=ulysses`) trips a device-side assert with cp≥2 + intra-doc masking
++ torch.compile: `index out of bounds: 0 <= idx < <max_tokens_per_rank>`. Ulysses passes the
+FULL-sequence `cu_doc_lens` while the tensor is seq-sharded to `max_tokens_per_rank`/rank, so the
+attention position/bucketize kernel indexes global doc positions into a per-rank buffer → OOB. See the
+`OLMO_CP_STYLE` note in `Olmo-3-32B-SFT-bf16.py`. **Use the default `ring` CP** (doc-mask-aware,
+FA2-friendly, the proven path) — just omit `--cp-style`. Ulysses stays opt-in until that's debugged.
