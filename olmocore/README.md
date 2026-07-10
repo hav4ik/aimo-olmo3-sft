@@ -90,11 +90,11 @@ sweet spot is a group of 2–4 nodes: fits the model, keeps most heavy comm loca
 
 | Knob | Env | Notes |
 |---|---|---|
-| `--optim` | `OLMO_OPTIM` | `fused_adamw` (default, fp32 moments) · `skip_step` (SkipStepAdamW spike protection; equals AdamW when not skipping) |
-| `--optim-dtype` | `OLMO_OPTIM_DTYPE` | `bf16` stores Adam moments (m/v) in bf16 (**~16 GB/rank less**, fp32 master kept). **Only `skip_step` honors it.** |
+| `--optim` | `OLMO_OPTIM` | **`skip_step` (DEFAULT)** — SkipStepAdamW spike protection (equals AdamW when not skipping) · `fused_adamw` (fp32 fused-kernel baseline, fastest, most VRAM) |
+| `--optim-dtype` | `OLMO_OPTIM_DTYPE` | **DEFAULT `bf16`** for skip_step — Adam moments (m/v) in bf16 (**~16 GB/rank less**, fp32 master kept). Set `fp32` to force fp32 moments. Ignored by `fused_adamw`. |
 
-**Recommended: `--optim skip_step --optim-dtype bf16`** — spike protection + the biggest safe optimizer
-memory cut, and it's the proven config from the fp8 run.
+**Default = `skip_step` + bf16 moments** — spike protection + the biggest safe optimizer memory cut, the
+proven config from the fp8 run. Nothing to pass; use `--optim fused_adamw` only for the fp32 baseline.
 
 > ⚠️ **`adamw8bit` (bitsandbytes) does NOT work here.** bitsandbytes has no DTensor support, so under
 > FSDP2 its 8-bit update kernel raises *"optimizer_update_8bit_blockwise got mixed torch.Tensor and

@@ -210,11 +210,12 @@ export OLMO_SFT_SAVE_ROOT="${OLMO_SFT_SAVE_ROOT:-$DATA/checkpoints}"   # overrid
 # OLMO_SHARED_FS=0 only for a genuine per-node (non-shared) filesystem (then also set FS_LOCAL_RANK).
 export OLMO_SHARED_FS="${OLMO_SHARED_FS:-1}"
 
-# Optimizer per precision: fused AdamW for the stable BF16 baseline (single fused CUDA kernel =
-# faster), SkipStepAdamW for FP8 (spike protection + the trainer's `optim/step skipped` metric,
-# which averages to the FP8 step-skip frequency). Override explicitly with OLMO_OPTIM.
+# Optimizer: default SkipStepAdamW (the sft script pairs it with bf16 Adam moments) — spike protection
+# (auto-skips a step when loss/grad-norm spikes past a rolling sigma band, logs `optim/step skipped`)
+# AND ~16 GB/rank less optimizer VRAM than fused fp32 AdamW. Override with OLMO_OPTIM=fused_adamw (fp32
+# fused-kernel baseline, fastest).
 if [ -z "${OLMO_OPTIM:-}" ]; then
-    [ "$PRECISION" = "fp8" ] && OLMO_OPTIM=skip_step || OLMO_OPTIM=fused_adamw
+    OLMO_OPTIM=skip_step
 fi
 export OLMO_OPTIM
 

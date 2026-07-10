@@ -24,8 +24,8 @@ Retained env knobs (all opt-in / off by default unless noted):
   5. OLMO_CP_STYLE (default ring): ring (llama3, doc-mask-aware) or ulysses (all-to-all).
   6. OLMO_AC_BUDGET : activation-checkpointing mode (unset = selected_modules; <0..1> = budget; none).
   7. OLMO_SAVE_INTERVAL / OLMO_EPHEMERAL_INTERVAL / OLMO_KEEP_LAST_CKPTS : checkpoint cadence + retention.
-  8. OLMO_OPTIM (default fused_adamw here) : fused AdamW or skip_step (SkipStepAdamW spike protection,
-     independent of FP8); OLMO_OPTIM_DTYPE=bf16 stores Adam moments in bf16 (skip_step path only).
+  8. OLMO_OPTIM (default skip_step) : SkipStepAdamW spike protection, or fused_adamw (fp32 baseline);
+     OLMO_OPTIM_DTYPE (default bf16 for skip_step) stores Adam moments in bf16 (~16GB/rank less); =fp32 forces fp32.
 """
 
 import argparse
@@ -636,20 +636,17 @@ class SFTConfig(Config):
                 "Olmo-3-32B-SFT-local.py if you really intend FP8."
             )
 
-        # Optimizer by env. This bf16 script defaults to torch's FUSED AdamW (single fused CUDA kernel,
-        # fp32 state) — the stable bf16 baseline. OLMO_OPTIM=skip_step opts into SkipStepAdamW, which
-        # skips a step when the loss/grad-norm spikes past a rolling sigma band and auto-logs
-        # `optim/step skipped` (0/1 per step); it equals AdamW whenever it isn't skipping. (This is
-        # spike protection, independent of FP8 — which this script does not support.) weight_decay=0.0
-        # is the SFT recipe (different from pretraining).
-        # OLMO_OPTIM_DTYPE=bf16 stores the Adam MOMENTS (exp_avg/exp_avg_sq) in bf16 instead of fp32 —
-        # halves optimizer VRAM + checkpoint while KEEPING fp32 master weights. Only the skip_step
-        # optimizer exposes a state dtype. The bf16 2nd moment loses precision in the Adam denominator
-        # — VALIDATE loss parity vs fp32. Default off.
-        _opt_dt = DType.bfloat16 if os.environ.get("OLMO_OPTIM_DTYPE") in ("bf16", "bfloat16") else None
-        _optim = os.environ.get("OLMO_OPTIM", "fused_adamw")
+        # Optimizer by env. DEFAULT: SkipStepAdamW with bf16 Adam moments. skip_step auto-skips a step
+        # when the loss/grad-norm spikes past a rolling sigma band (logs `optim/step skipped` 0/1 per
+        # step; equals AdamW when not skipping) — spike protection. bf16 moments (exp_avg/exp_avg_sq)
+        # halve optimizer VRAM + checkpoint while KEEPING fp32 master weights (~16 GB/rank less at 32B).
+        # Set OLMO_OPTIM_DTYPE=fp32 to force fp32 moments (the bf16 2nd moment loses precision in the Adam
+        # denominator — validate parity if in doubt). OLMO_OPTIM=fused_adamw is the fp32 fused-kernel
+        # baseline (fastest, most VRAM). weight_decay=0.0 is the SFT recipe (different from pretraining).
+        _opt_dt_env = os.environ.get("OLMO_OPTIM_DTYPE")  # explicit user choice, or None
+        _optim = os.environ.get("OLMO_OPTIM", "skip_step")
         if _optim == "fused_adamw":
-            if _opt_dt is not None:
+            if _opt_dt_env in ("bf16", "bfloat16"):  # warn only if EXPLICITLY set (skip_step's bf16 default won't nag)
                 log.warning("OLMO_OPTIM_DTYPE applies only to the skip_step optimizer; fused AdamW keeps fp32 state")
             optim_config = AdamWConfig(lr=8e-05, weight_decay=0.0, betas=(0.9, 0.95), fused=True)
         elif _optim == "adamw8bit":
@@ -666,6 +663,8 @@ class SFTConfig(Config):
                 "(~16 GB/rank less, fp32 master kept) or OLMO_OPTIM=fused_adamw."
             )
         elif _optim == "skip_step":
+            # Moments default to bf16 (~16 GB/rank less; fp32 master kept). OLMO_OPTIM_DTYPE=fp32 forces fp32.
+            _opt_dt = DType.bfloat16 if (_opt_dt_env or "bf16") in ("bf16", "bfloat16") else None
             optim_config = SkipStepAdamWConfig(
                 lr=8e-05, weight_decay=0.0, betas=(0.9, 0.95), compile=False, dtype=_opt_dt
             )
