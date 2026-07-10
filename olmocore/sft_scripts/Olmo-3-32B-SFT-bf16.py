@@ -19,7 +19,8 @@ Retained env knobs (all opt-in / off by default unless noted):
   2. GPUS_PER_NODE from torchrun's LOCAL_WORLD_SIZE.
   3. OLMO_ATTN_BACKEND=flash_2|flash_3 ; OLMO_MODEL_DTYPE ; OLMO_USE_SINK(=1)/OLMO_SINK_INIT
      (per-head attention sink; requires flash_2/flash_3).
-  4. OLMO_FUSED_LCE=1 : Liger fused-linear CE (off by default; ~6.5% higher loss measured here).
+  4. OLMO_FUSED_LCE (default ON): Liger fused-linear CE — no materialized (T,vocab) logits
+     (~10 GB saved at 64K, more at 128K). Set =0 to fall back to the materialized reference.
   5. OLMO_CP_STYLE (default ring): ring (llama3, doc-mask-aware) or ulysses (all-to-all).
   6. OLMO_AC_BUDGET : activation-checkpointing mode (unset = selected_modules; <0..1> = budget; none).
   7. OLMO_SAVE_INTERVAL / OLMO_EPHEMERAL_INTERVAL / OLMO_KEEP_LAST_CKPTS : checkpoint cadence + retention.
@@ -32,7 +33,7 @@ import fnmatch
 import logging
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, List, Optional, Tuple, cast
 from urllib.parse import urlparse
@@ -115,6 +116,23 @@ log = logging.getLogger(__name__)
 # the RTX 6000 Blackwell is sm_120 (HIGHER cc than Hopper's sm_90) but only ~99 KB smem, and the A100 is
 # sm_80 with ~163 KB — both too small. Gate on the ACTUAL shared_memory_per_block_optin (the exact
 # "Hardware limit" inductor reports).
+def _env_bool(val: Optional[str]) -> Optional[bool]:
+    """Parse a tri-state env flag: True / False / None (unset or unrecognized -> auto).
+
+    Accepts common spellings case-insensitively (``1/true/yes/on`` vs ``0/false/no/off``) so that
+    ``OLMO_FUSED_RMSNORM=true`` doesn't silently mean "off". Empty or unrecognized -> None so the
+    caller falls back to auto-detection (the safe direction: auto turns fused_rms ON where it's needed).
+    """
+    if val is None:
+        return None
+    v = val.strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        return True
+    if v in ("0", "false", "no", "off"):
+        return False
+    return None
+
+
 _SMEM_OPTIN = (
     getattr(torch.cuda.get_device_properties(0), "shared_memory_per_block_optin", 0)
     if torch.cuda.is_available()
@@ -130,15 +148,48 @@ _SMALL_SMEM = bool(_SMEM_OPTIN and _SMEM_OPTIN < 200 * 1024)
 # routes the wide norms through flash-attn's hand-tiled Triton kernel instead of inductor codegen. We
 # still flip the flag here as defence-in-depth for any OTHER wide reduction inductor might try.
 # OLMO_PERSISTENT_REDUCTIONS=1/0 forces the choice explicitly.
-_pr = os.environ.get("OLMO_PERSISTENT_REDUCTIONS")
+_pr = _env_bool(os.environ.get("OLMO_PERSISTENT_REDUCTIONS"))
 if _pr is not None:
-    torch._inductor.config.triton.persistent_reductions = _pr == "1"
+    torch._inductor.config.triton.persistent_reductions = _pr
 elif _SMALL_SMEM:
     torch._inductor.config.triton.persistent_reductions = False
     log.info(
         f"GPU smem/block={_SMEM_OPTIN // 1024} KB (< 200 KB): inductor persistent_reductions=False "
         "(defence-in-depth; the wide RMSNorm is handled by fused_rms — see model build)"
     )
+
+
+def _maybe_use_fused_rmsnorm(
+    model: TransformerConfig, small_smem: bool, env_val: Optional[str] = None
+) -> bool:
+    """Route the model's RMSNorms through :class:`FusedRMSNorm` (flash-attn Triton kernel).
+
+    On GPUs whose opt-in smem/block can't hold the compiled persistent RMSNorm reduction (RTX 6000
+    ~99 KB, A100 ~163 KB), the flash-attn Triton ``rms_norm`` kernel is used instead of inductor
+    codegen — same fp32 RMSNorm math, but no 196 KB smem tile. This is exactly what olmo-core's
+    ``fused_ops=True`` does for these same slots, so it's a supported FSDP2 + torch.compile path.
+    Decision (via :func:`_env_bool`, tolerant of ``1/true/yes/on`` vs ``0/false/no/off``):
+
+    * force on  (``OLMO_FUSED_RMSNORM=1``) / force off (``=0``)
+    * unset/unrecognized -> auto: on iff ``small_smem`` (Hopper/B200 keep stock ``rms``)
+
+    IMPORTANT — cover EVERY wide norm: in ``olmo3_32B``, ``use_head_qk_norm=False``, so ``q_norm`` is
+    built over ``n_heads*head_dim`` (40*128 = **5120**, full projection width — NOT head_dim), i.e. it
+    is exactly as wide as ``block.layer_norm`` and compiles the SAME persistent reduction. Leaving it as
+    ``rms`` would make it rely on the unreliable ``persistent_reductions=False`` flag. So swap the
+    ``qk_norm`` slot too (builds q_norm@5120 and k_norm@1024). ``block.layer_norm``, ``lm_head.layer_norm``
+    and ``qk_norm`` SHARE one ``LayerNormConfig`` instance, so use one ``replace``'d config for all three
+    (fresh object; never mutate the shared one in place). Returns True iff the swap was applied.
+    """
+    choice = _env_bool(env_val)
+    use = small_smem if choice is None else choice
+    if use:
+        fused = replace(model.block.layer_norm, name=LayerNormType.fused_rms)
+        model.block.layer_norm = fused
+        model.lm_head.layer_norm = fused
+        model.block.sequence_mixer.qk_norm = fused
+    return use
+
 
 @OptimConfig.register("paged_adamw8bit")
 @dataclass
@@ -524,37 +575,28 @@ class SFTConfig(Config):
         ).with_rope_scaling(_yarn_rope_scaling(_hf_cfg))
         # Wide RMSNorm (over d_model=5120) can't compile as a persistent reduction on GPUs with
         # <~200 KB opt-in smem, and persistent_reductions=False does NOT reliably force a looped kernel
-        # for this fused (residual-add + norm) op — inductor still emits a persistent reduction and
-        # compile dies with "out of resource: shared memory" (196680 > 101376 on the RTX 6000). Swap the
-        # two wide norms (block + lm_head) to FusedRMSNorm, which calls flash-attn's hand-tiled Triton
-        # rms_norm kernel (no giant smem tile; residual add stays a separate cheap op) instead of relying
-        # on inductor codegen. Same fp32 RMSNorm math. QK-norm (over head_dim) is narrow -> left as-is.
+        # for the fused (residual-add + norm) block op — inductor still emits a persistent reduction and
+        # compile dies with "out of resource: shared memory" (196680 > 101376 on the RTX 6000). Swap all
+        # RMSNorm sites to FusedRMSNorm (flash-attn's hand-tiled Triton rms_norm; no giant smem tile),
+        # same fp32 math. NB: q_norm is ALSO 5120-wide here (use_head_qk_norm=False -> norm over the full
+        # n_heads*head_dim projection, not per-head), so it must be swapped too — see the helper.
         # Auto-on where smem is small (RTX 6000); Hopper/B200 keep the stock `rms` path unchanged.
         # OLMO_FUSED_RMSNORM=1/0 forces it.
-        _frn = os.environ.get("OLMO_FUSED_RMSNORM")
-        if (_frn == "1") if _frn is not None else _SMALL_SMEM:
-            # NB: block.layer_norm, lm_head.layer_norm and the (narrow) qk_norm share ONE
-            # LayerNormConfig instance, so mutate a COPY per wide site — otherwise qk_norm (over
-            # head_dim) flips too. qk_norm has no smem issue and fused_rms on per-head qk-norm is
-            # unvalidated, so leave it on stock `rms`.
-            import dataclasses as _dc
-
-            model.block.layer_norm = _dc.replace(model.block.layer_norm, name=LayerNormType.fused_rms)
-            model.lm_head.layer_norm = _dc.replace(
-                model.lm_head.layer_norm, name=LayerNormType.fused_rms
-            )
+        if _maybe_use_fused_rmsnorm(model, _SMALL_SMEM, os.environ.get("OLMO_FUSED_RMSNORM")):
             log.info(
-                "Wide RMSNorm (block + lm_head) -> FusedRMSNorm (flash-attn Triton) to avoid the "
-                "inductor persistent-reduction shared-memory OOM at compile; qk_norm kept as rms"
+                "RMSNorm (block + lm_head + q/k norm, all d_model-wide here since use_head_qk_norm="
+                "False) -> FusedRMSNorm (flash-attn Triton) to avoid the inductor persistent-reduction "
+                "shared-memory OOM at compile"
             )
-        # DIFF #5: OLMO_FUSED_LCE=1 opts into Liger fused-linear cross-entropy (no materialized
-        # (T, vocab) logits, ~10 GB saved at seq 65536). DEFAULT OFF — measured on our setup it gives
-        # ~6.5% HIGHER loss than the materialized reference (a Liger reduction-normalization
-        # difference, NOT logit precision) AND lower MFU/throughput (per-step device sync in Liger's
-        # backward breaks overlap; no memory-bandwidth win on a comm-bound, non-lm-head-bound step).
-        # Materialized matches AI2's Olmo-3-7B-SFT.py reference + BF16. Use fused ONLY when genuinely
-        # memory-constrained (e.g. 32B) and validate convergence first. liger-kernel is in the image.
-        if os.environ.get("OLMO_FUSED_LCE") == "1":
+        # DIFF #5: Liger fused-linear cross-entropy — never materializes the (T, vocab) logits
+        # (~10 GB saved at seq 65536, more at 128K). DEFAULT ON: this 32B long-context recipe is
+        # memory-bound and the materialized logits are one of the largest single allocations at the
+        # loss. Both code paths (olmo_core/nn/lm_head.py) pass the SAME `reduction` and the fused path
+        # accumulates in fp32 (Liger #512 fix). The previously-seen ~6.5% loss gap was a z-loss ×
+        # skip-step-AdamW interaction (NOT a fused-CE precision issue), since fixed in olmo-core.
+        # Set OLMO_FUSED_LCE=0 to fall back to the materialized reference for an A/B. liger-kernel is
+        # in the image.
+        if _env_bool(os.environ.get("OLMO_FUSED_LCE")) is not False:  # default ON; only 0/false/no/off disables
             from olmo_core.nn.lm_head import LMLossImplementation
             model.lm_head.loss_implementation = LMLossImplementation.fused_linear
         # FP8 is intentionally REMOVED from this script (the Olmo-3 authors flagged FP8 SFT as too

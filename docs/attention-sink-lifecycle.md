@@ -175,13 +175,20 @@ Required 196680 > limit ~101376). The wide RMSNorm (over the 5120 hidden dim), f
 add, compiles to a *persistent* reduction that loads the full row into shared memory (~196 KB).
 **Hopper/B200 (~228 KB smem/block) fit it; the RTX 6000 (~99 KB) and A100 (~163 KB) do not.**
 
-⚠️ Setting `torch._inductor.config.triton.persistent_reductions=False` is **NOT sufficient** — for this
-fused (residual-add + norm) op inductor still emits a persistent reduction and compile dies anyway
-(confirmed on the RTX 6000). **The real fix: `fused_rms`.** The sft script auto-swaps the two wide norms
-(`block.layer_norm`, `lm_head.layer_norm`) to `FusedRMSNorm`, which calls flash-attn's hand-tiled Triton
-`rms_norm` kernel (no giant smem tile; residual add stays a separate cheap op) instead of inductor
-codegen — same fp32 RMSNorm math. qk_norm (over head_dim) is narrow and left as stock `rms`. Auto-on when
-`shared_memory_per_block_optin < 200 KB`; Hopper/B200 keep stock `rms`. Force with `--fused-rmsnorm 1/0`
-(`OLMO_FUSED_RMSNORM`). The `persistent_reductions` flag is still flipped as defence-in-depth for any
-other wide reduction. Eager fallback (no compile at all): `-e TORCHDYNAMO_DISABLE=1` (drop `--ac-budget`;
-budget mode needs compile).
+⚠️ Setting `torch._inductor.config.triton.persistent_reductions=False` is **NOT sufficient** — for the
+fused (residual-add + norm) block op inductor still emits a persistent reduction and compile dies anyway
+(confirmed on the RTX 6000). **The real fix: `fused_rms`.** The sft script auto-swaps *all* RMSNorm sites
+to `FusedRMSNorm`, which calls flash-attn's hand-tiled Triton `rms_norm` kernel (no giant smem tile)
+instead of inductor codegen — same fp32 RMSNorm math, and the path olmo-core's own `fused_ops=True` uses
+(so it's FSDP2 + compile safe).
+
+The wide (d_model=5120) norms are `block.layer_norm`, `lm_head.layer_norm` **and `q_norm`** — note
+`olmo3_32B` sets `use_head_qk_norm=False`, so `q_norm` normalizes the *full* `n_heads*head_dim = 5120`
+projection (NOT per-head/head_dim), i.e. it's exactly as wide and would OOM the same way if left on `rms`.
+All three (plus `k_norm`@1024) share one `LayerNormConfig`, so the swap `replace`s it once and points every
+slot at the fused config. Auto-on when `shared_memory_per_block_optin < 200 KB`; Hopper/B200 keep stock
+`rms`. Force with `--fused-rmsnorm 1/0` (`OLMO_FUSED_RMSNORM`, tolerant of `1/true/yes/on` vs
+`0/false/no/off`). The `persistent_reductions` flag is still flipped as defence-in-depth. Eager fallback
+(no compile at all): `-e TORCHDYNAMO_DISABLE=1` (drop `--ac-budget`; budget mode needs compile). Tests:
+recipe `olmocore/tests/test_fused_rmsnorm_swap.py` (swap logic + all-wide-norm coverage + build), olmo-core
+`layer_norm_test.py::test_fused_rms_norm_wide_matches_rms_fwd_bwd` (fwd/bwd parity at 5120).
