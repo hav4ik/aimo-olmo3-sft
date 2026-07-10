@@ -380,7 +380,13 @@ class SFTConfig(Config):
         root_dir = get_root_dir(cluster)
         user_name = get_beaker_username()
 
-        tokenizer_config = TokenizerConfig.dolma2()
+        # Tokenizer: default dolma2, but OLMO_TOKENIZER_HF=<hf-model-id> reads vocab_size + eos/pad/bos
+        # straight from that model's config.json (TokenizerConfig.from_hf). Required for non-dolma2
+        # models — e.g. this stack's deepseek-transplant Olmo3 (vocab 129280, eos 1 / bos 0 / pad 2).
+        # It sizes the embedding/lm_head (padded_vocab_size) and gives the eos id used for intra-doc
+        # masking, so it MUST match both the base checkpoint and how the .npy data was tokenized.
+        _hf_tok = os.environ.get("OLMO_TOKENIZER_HF")
+        tokenizer_config = TokenizerConfig.from_hf(_hf_tok) if _hf_tok else TokenizerConfig.dolma2()
         dataset_config = build_sft_dataset(
             root_dir=root_dir,
             tokenizer_config=tokenizer_config,

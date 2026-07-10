@@ -69,6 +69,14 @@ esac
 # script with all FP8 code removed (the Olmo-3 authors flagged FP8 SFT as too reckless; it raises if
 # OLMO_FP8 is set). bootstrap.sh already downloads it with the repo.
 SFT_SCRIPT_NAME="${SFT_SCRIPT_NAME:-$DEF_SFT}"   # per-size SFT script basename; explicit env wins
+# Tokenizer: default dolma2. OLMO_HF_TOKENIZER=<hf-id> (or 1 => reuse HF_MODEL) makes BOTH the
+# HF->distcp convert and training read vocab_size + eos/pad/bos from that model's config.json
+# (TokenizerConfig.from_hf) instead of dolma2 — required for non-dolma2 models (e.g. the
+# deepseek-transplant Olmo3, vocab 129280). It sizes the embedding/lm_head and gives the eos id for
+# intra-doc masking, so it MUST match the base checkpoint AND how the .npy data was tokenized.
+[ "${OLMO_HF_TOKENIZER:-}" = "1" ] && OLMO_HF_TOKENIZER="$HF_MODEL"
+TOKENIZER_ARG="${OLMO_HF_TOKENIZER:-dolma2}"
+[ -n "${OLMO_HF_TOKENIZER:-}" ] && export OLMO_TOKENIZER_HF="$OLMO_HF_TOKENIZER"
 SEQ_LEN="${SEQ_LEN:-$DEF_SEQ_LEN}"   # per-size default (1b=4096 native, 7b/32b=65536); explicit env wins
 export OLMO_KEEP_LAST_CKPTS="${OLMO_KEEP_LAST_CKPTS:-$DEF_KEEP}"
 CKPT="${CKPT:-$DATA/checkpoints/olmocore-olmo3-${MODEL_SIZE}-think/model_and_optim}"
@@ -125,7 +133,7 @@ if [ "${STAGE:-train}" = "convert" ] || [ ! -f "$CONVERT_DONE" ]; then
         [ "${OLMO_USE_SINK:-0}" = "1" ] && SINK_CONV_ARGS=(--use-sink --sink-init "${OLMO_SINK_INIT:-0.0}")
         python /workspace/OLMo-core/src/examples/huggingface/convert_checkpoint_from_hf.py \
             --checkpoint-input-path "$CONV_SRC" --model-arch "${MODEL_ARCH:-olmo3_7b}" \
-            --tokenizer dolma2 --output-dir "$CKPT_DIR" --skip-validation "${SINK_CONV_ARGS[@]}"
+            --tokenizer "$TOKENIZER_ARG" --output-dir "$CKPT_DIR" --skip-validation "${SINK_CONV_ARGS[@]}"
         touch "$CONVERT_DONE"
         echo "[olmocore] convert complete ($CONVERT_DONE)"
     else
