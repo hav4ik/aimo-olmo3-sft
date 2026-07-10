@@ -86,8 +86,12 @@ RUN if [ -n "${FA2_SINK_KERNEL}" ]; then \
 ARG FLASH_ATTN_3_SHA="92ca9da8d66f7b34ff50dc080ec0fef9661260d6"
 ARG FA3_MAX_JOBS=16
 ARG FA3_SINK_KERNEL=
+# Bump FA3_CACHEBUST to force this layer to recompile (its cache key ignores whether nvcc was
+# actually present in a prior build — a missing-nvcc build silently installs STOCK flash_attn_3).
+ARG FA3_CACHEBUST=1
 COPY src/olmo_core/nn/attention/fa3_attention_sink.patch /tmp/fa3_attention_sink.patch
-RUN git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/Dao-AILab/flash-attention.git && \
+RUN echo "[fa3] cachebust=${FA3_CACHEBUST} sink=${FA3_SINK_KERNEL}" && \
+    git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/Dao-AILab/flash-attention.git && \
     cd flash-attention && \
     git fetch --depth 1 origin ${FLASH_ATTN_3_SHA} && \
     git checkout ${FLASH_ATTN_3_SHA} && \
@@ -95,7 +99,10 @@ RUN git clone --depth 1 --recurse-submodules --shallow-submodules https://github
     if [ -n "${FA3_SINK_KERNEL}" ]; then \
         echo "[fa3] applying in-kernel attention-sink patch"; \
         git apply --check /tmp/fa3_attention_sink.patch && git apply /tmp/fa3_attention_sink.patch; \
+        grep -q 'Tensor? sink' hopper/flash_api.cpp || { echo "[fa3] ERROR: patch did not add sink to flash_api.cpp"; exit 1; }; \
     fi && \
+    # nvcc MUST be present or setup.py silently installs a stock (uncompiled) flash_attn_3.
+    { command -v nvcc >/dev/null || { echo "[fa3] ERROR: nvcc not found (CUDA toolchain missing) — would install STOCK flash_attn_3"; exit 1; }; } && \
     cd hopper && \
     FLASH_ATTENTION_DISABLE_FP16=TRUE FLASH_ATTENTION_DISABLE_SM80=TRUE MAX_JOBS=${FA3_MAX_JOBS} python setup.py install && \
     cd /app/build && \
@@ -111,6 +118,11 @@ RUN cd /opt/conda/lib/python${PYTHON_VERSION}/site-packages/ && \
     mv flash_attn_3-*.egg/flash_attn_interface.py flash_attn_3/ && \
     touch flash_attn_3/__init__.py && \
     rm -rf flash_attn_3-*
+
+# NOTE: whether the COMPILED flash_attn_3.fwd actually carries the in-kernel `sink` arg is verified
+# post-build on a box with a GPU driver (importing flash_attn_3 in this driver-less build stage can
+# fail to load the CUDA .so). The hard guards above — patched-source grep + nvcc-present — already
+# prevent the stock-FA3 bug that a missing-nvcc build would otherwise cache silently.
 
 # Install transformer-engine.
 ARG TE_VERSION=2.9
