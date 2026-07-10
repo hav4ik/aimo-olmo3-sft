@@ -2,7 +2,7 @@
 # ENTRYPOINT. Clones THIS repo's code at container start, so the code iterates independently of the
 # heavy-deps image (we change configs/recipes far more often than the image). SINGLE source of
 # truth = the git ref you ask for. Pin a run with CODE_REF=<branch|tag|commit> (default: the
-# olmo3-sft branch); the resolved commit SHA is printed at startup so any run is traceable/debuggable.
+# olmocore-cu128-fa2-sink branch); the resolved commit SHA is printed at startup so runs are traceable.
 #
 # Clones into the MOUNTED run storage (CODE_DIR, default /data/training/code) — writable even under a
 # read-only Singularity rootfs, and the exact code that ran sits next to the checkpoints. Multi-node:
@@ -35,7 +35,7 @@ elif env | grep -q '^BEAKER_' && [ -z "${WORLD_SIZE:-}" ]; then
 fi
 
 REPO="${CODE_REPO:-https://github.com/hav4ik/aimo-olmo3-sft}"
-REF="${CODE_REF:-${CODE_BRANCH:-olmo3-sft}}"
+REF="${CODE_REF:-${CODE_BRANCH:-olmocore-cu128-fa2-sink}}"
 DEST="${CODE_DIR:-/data/training/code}"
 READY="$DEST/.code_ready"
 RANK="${NODE_RANK:-${GLOBAL_RANK:-0}}"

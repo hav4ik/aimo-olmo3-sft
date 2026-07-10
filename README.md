@@ -23,7 +23,7 @@ memory ladder + floor budget, activation checkpointing, fused ops, checkpointing
   stable infra: `bootstrap.sh` (ENTRYPOINT) + the nvrtc/TE linker fix. At start, bootstrap clones
   the code into the mounted run storage `/data/training/code` and execs `entrypoint.sh`. The code
   is the **single source of truth = the git ref**: pin a run with `CODE_REF=<branch|tag|commit>`
-  (default branch `olmo3-sft`); the resolved commit SHA is printed at startup. Multi-node: node-rank
+  (default branch `olmocore-cu128-fa2-sink`); the resolved commit SHA is printed at startup. Multi-node: node-rank
   0 stages the code on the shared storage and the other nodes use it (identical code on every rank).
 - **`entrypoint.sh`** dispatches on `FRAMEWORK` → `olmocore/run.sh` or `axolotl/run.sh`. No
   `FRAMEWORK` ⇒ shell.
@@ -35,7 +35,7 @@ memory ladder + floor budget, activation checkpointing, fused ops, checkpointing
 1. **Create** the GitHub repo `hav4ik/aimo-olmo3-sft` (public) and push this branch:
    ```bash
    git remote add origin https://github.com/hav4ik/aimo-olmo3-sft.git
-   git push -u origin olmo3-sft
+   git push -u origin olmocore-cu128-fa2-sink
    ```
 2. **Build + push the images** (needs your `docker login`):
    ```bash
@@ -82,7 +82,7 @@ FP8: `-e PRECISION=fp8`. **Full env contract + data-prep guide in `HANDOUTS.md`.
 | `SEQ_LEN`/`SEQUENCE_LEN`, `GLOBAL_BATCH_SIZE`, `MAX_STEPS`, `LR`, `EPOCHS` | recipe overrides (use small values for a single-GPU smoke) |
 | `RANK_MICROBATCH_TOKENS` | olmocore: per-DP-rank microbatch in tokens; per-**device** = ÷ cp. Spends spare VRAM on throughput (G stays fixed, grad-accum auto-derives). See [BATCHING.md](BATCHING.md) |
 | `OLMO_ATTN_BACKEND` / `ATTN_IMPL`, `OLMO_FP8` | force attention / FP8 recipe instead of auto |
-| `CODE_BRANCH` | which branch of this repo to pull (default `olmo3-sft`) |
+| `CODE_BRANCH` | which branch of this repo to pull (default `olmocore-cu128-fa2-sink`) |
 
 ## Data layout under `/data/training` (produced by `data_prep/prepare.sh --name <NAME>`)
 - `datasets/<NAME>/messages.parquet` — normalized, shared (Axolotl reads this)
