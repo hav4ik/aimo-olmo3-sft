@@ -43,7 +43,7 @@ docker build -f "${REPO_ROOT}/docker/base/Dockerfile.olmo-core-official" \
     --build-arg FLASH_ATTN_CUDA_ARCHS="86;90;100;120" \
     --build-arg OLMO_EXTRAS="${NO_FA4_EXTRAS}" \
     --build-arg FA2_SINK_KERNEL="${FA2_SINK_KERNEL:-}" \
-    --build-arg FA3_SINK_KERNEL="${FA3_SINK_KERNEL:-1}" \
+    --build-arg FA3_SINK_KERNEL="${FA3_SINK_KERNEL:-}" \
     -t "${BASE_TAG}" "${OLMO_CORE_DIR}"
 
 echo "==> [2/3] + olmo_core source (${OLMO_CORE_REF}) -> ${SFT_TAG}"

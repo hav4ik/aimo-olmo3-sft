@@ -1,7 +1,13 @@
 # Running Olmo-3 SFT (cu128 / FA2 + in-kernel FA3 sink container)
 
-Image: `chankhavu/olmo3-olmocore:cu128-fa2-sink` — CUDA 12.8, torch 2.10, FA2 (post-correction sink,
-correctness fallback) + **in-kernel FA3 sink** (default on Hopper), Ulysses CP, FP8 removed.
+Image: `chankhavu/olmo3-olmocore:cu128-fa2-sink` — CUDA 12.8, torch 2.10, Ulysses CP, FP8 removed.
+
+**Attention sink is applied via exact post-correction on both FA2 and FA3** (forward + dq/dk/dv/dsink
+match the eager reference bit-for-bit up to fp rounding). In-kernel FA3 is **not** active on this
+image: torch 2.10 compiles flash-attn 3's stable-ABI `flash_api_stable.cpp`, but the in-kernel sink
+patch targets `flash_api.cpp` (used only by torch < 2.9.0.dev, which is what Yi-Chia's fork trains on).
+Post-correction is numerically identical for a fresh SFT; enabling true in-kernel FA3 would require
+porting the sink through the stable ABI. See `has_fa3_sink_kernel()` — it correctly reports `False` here.
 
 Everything below is **on the GPU node** (needs `docker` + NVIDIA runtime). You drive it with the
 host-side launcher `olmocore/launch.sh` — you never write a long `docker run` by hand.

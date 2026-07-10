@@ -79,10 +79,13 @@ RUN if [ -n "${FA2_SINK_KERNEL}" ]; then \
     fi
 
 # Install flash-attn 3.
-# FA3_SINK_KERNEL=1 applies the in-kernel per-head attention sink patch (fa3_attention_sink.patch,
-# verified to apply to this pinned SHA) to the Hopper kernel before building — the production path the
-# olmo3_sink fork trains on (attn=olmo3_sink_fa3). Default empty = stock FA3 (runtime falls back to
-# the exact post-correction). Patch lives in the olmo_core source tree (build context).
+# FA3_SINK_KERNEL=1 applies the in-kernel per-head attention sink patch (fa3_attention_sink.patch) to
+# the Hopper kernel before building. NOTE (torch >= 2.9.0.dev, incl. torch 2.10 here): flash-attn 3's
+# setup.py compiles the STABLE-ABI api file `flash_api_stable.cpp` (-> `_C.abi3.so`), but the patch
+# only edits `flash_api.cpp` (compiled by torch < 2.9.0.dev, which is what the olmo3_sink fork trains
+# on). So on this image the patch is a NO-OP for the op schema and FA3 ships STOCK — the runtime uses
+# the exact post-correction sink (numerically identical for a fresh SFT). True in-kernel FA3 on torch
+# 2.10 would require porting the sink through flash_api_stable.cpp's stable ABI. Default = stock.
 ARG FLASH_ATTN_3_SHA="92ca9da8d66f7b34ff50dc080ec0fef9661260d6"
 ARG FA3_MAX_JOBS=16
 ARG FA3_SINK_KERNEL=
@@ -100,6 +103,12 @@ RUN echo "[fa3] cachebust=${FA3_CACHEBUST} sink=${FA3_SINK_KERNEL}" && \
         echo "[fa3] applying in-kernel attention-sink patch"; \
         git apply --check /tmp/fa3_attention_sink.patch && git apply /tmp/fa3_attention_sink.patch; \
         grep -q 'Tensor? sink' hopper/flash_api.cpp || { echo "[fa3] ERROR: patch did not add sink to flash_api.cpp"; exit 1; }; \
+        # torch >= 2.9.0.dev compiles flash_api_stable.cpp (stable ABI), NOT flash_api.cpp. The patch
+        # does not cover it, so the sink would silently NOT compile in. Fail loudly if that file lacks
+        # the sink arg (i.e. someone requested in-kernel on a torch that needs the stable-ABI port).
+        if python -c "import torch,sys; from packaging.version import parse as p; sys.exit(0 if p(torch.__version__) >= p('2.9.0.dev20250830') else 1)"; then \
+            grep -q 'Tensor? sink' hopper/flash_api_stable.cpp || { echo "[fa3] ERROR: torch >= 2.9 compiles flash_api_stable.cpp but the sink patch does not cover it — in-kernel FA3 would silently be STOCK. Port the sink to the stable ABI or build with FA3_SINK_KERNEL= (stock + post-correction)."; exit 1; }; \
+        fi; \
     fi && \
     # nvcc MUST be present or setup.py silently installs a stock (uncompiled) flash_attn_3.
     { command -v nvcc >/dev/null || { echo "[fa3] ERROR: nvcc not found (CUDA toolchain missing) — would install STOCK flash_attn_3"; exit 1; }; } && \
