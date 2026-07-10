@@ -42,6 +42,7 @@ STAGE=""                       # empty => train (auto-converts first); or 'conve
 NNODES="1"; NODE_RANK="0"; MASTER_ADDR="127.0.0.1"; MASTER_PORT="29400"
 GPUS="all"
 DRY_RUN=0
+RUN_TESTS=0                    # --test => run the attention-sink unit tests in the container, not train
 declare -a EXTRA_ENV=()        # --env KEY=VAL (repeatable) for anything not covered
 
 usage() {
@@ -71,6 +72,8 @@ Flags (defaults in []):
   --master-addr HOST    rendezvous host [$MASTER_ADDR]      --master-port P [$MASTER_PORT]
   --gpus SPEC           docker --gpus value [$GPUS]
   --env KEY=VAL         extra env (repeatable)
+  --test                run the attention-sink unit tests in the container (FA2/FA3 sink
+                        correctness incl. FA2-post-correction vs FA3-in-kernel), then exit
   --dry-run             print the docker command, don't run
 EOF
 }
@@ -104,12 +107,29 @@ while [ $# -gt 0 ]; do
         --gpus) GPUS="$2"; shift 2;;
         --env) EXTRA_ENV+=("$2"); shift 2;;
         --dry-run) DRY_RUN=1; shift;;
+        --test) RUN_TESTS=1; shift;;
         -h|--help) usage; exit 0;;
         *) echo "unknown flag: $1" >&2; usage >&2; exit 2;;
     esac
 done
 
-[ -n "$DATA" ] || { echo "ERROR: --data DIR is required" >&2; exit 2; }
+# ---- test mode: run the attention-sink unit tests in the container (no data/model needed) --------
+if [ "$RUN_TESTS" -eq 1 ]; then
+    set -- docker run --rm --gpus "$GPUS" --ipc=host --entrypoint bash "$IMAGE" -c '
+        set -e; cd /workspace/OLMo-core
+        echo "===== sink math (eager reference; forward + dsink + dq/dk/dv) ====="
+        python src/test/nn/attention/attention_sink_test.py
+        echo "===== in-kernel FA2/FA3 + FA2-post-correction vs FA3-in-kernel (needs this GPU) ====="
+        python src/test/nn/attention/attention_sink_flash_test.py
+        echo "===== Ulysses CP + sink (multi-rank, gloo/CPU) ====="
+        python src/test/nn/attention/attention_sink_ulysses_test.py
+        echo "ALL ATTENTION-SINK TESTS PASSED"
+    '
+    if [ "$DRY_RUN" -eq 1 ]; then printf "%q " "$@"; echo; else echo "[launch] running attention-sink unit tests in $IMAGE"; exec "$@"; fi
+    exit 0
+fi
+
+[ -n "$DATA" ] || { echo "ERROR: --data DIR is required (or use --test to run unit tests)" >&2; exit 2; }
 
 # ---- assemble the container env ---------------------------------------------------------------
 declare -a ENVS=(
