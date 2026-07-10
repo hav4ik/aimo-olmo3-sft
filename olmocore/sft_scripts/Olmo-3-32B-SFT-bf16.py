@@ -108,17 +108,25 @@ from olmo_core.utils import prepare_cli_environment, seed_all
 log = logging.getLogger(__name__)
 
 # torch.compile: RMSNorm over the 5120-wide hidden dim compiles to a *persistent* reduction that loads
-# the full row into shared memory (~196 KB in fp32). Hopper (sm_90+, ~228 KB smem/block) fits it; Ampere
-# and Blackwell-workstation GPUs (RTX 6000 ~99 KB) do NOT -> inductor raises "No valid triton configs /
-# out of resource: shared memory" at compile time. Off Hopper, use LOOPED reductions so compile stays on
-# (tiny end-to-end cost — norms are ~1-2% of runtime; a looped reduction is ~10-40% slower for that one
-# kernel). OLMO_PERSISTENT_REDUCTIONS=1/0 forces the choice explicitly.
+# the full row into shared memory (~196 KB in fp32). GPUs with a large opt-in smem/block (Hopper H100 &
+# datacenter Blackwell B200 ~227 KB) fit it; smaller ones do NOT and inductor raises "No valid triton
+# configs / out of resource: shared memory" at compile time. This is NOT a compute-capability question —
+# the RTX 6000 Blackwell is sm_120 (HIGHER cc than Hopper's sm_90) but only ~99 KB smem, and the A100 is
+# sm_80 with ~163 KB — both too small. So gate on the ACTUAL shared_memory_per_block_optin (this is the
+# exact "Hardware limit" inductor reports). Below the persistent-RMSNorm need -> LOOPED reductions so
+# compile stays on (tiny end-to-end cost — norms are ~1-2% of runtime). OLMO_PERSISTENT_REDUCTIONS=1/0
+# forces the choice explicitly.
 _pr = os.environ.get("OLMO_PERSISTENT_REDUCTIONS")
 if _pr is not None:
     torch._inductor.config.triton.persistent_reductions = _pr == "1"
-elif torch.cuda.is_available() and torch.cuda.get_device_capability()[0] < 9:
-    torch._inductor.config.triton.persistent_reductions = False
-    log.info("non-Hopper GPU: inductor persistent_reductions=False (RMSNorm compile fits shared memory)")
+elif torch.cuda.is_available():
+    _smem = getattr(torch.cuda.get_device_properties(0), "shared_memory_per_block_optin", 0)
+    if _smem and _smem < 200 * 1024:  # < ~200 KB can't fit the persistent RMSNorm (~196 KB)
+        torch._inductor.config.triton.persistent_reductions = False
+        log.info(
+            f"GPU smem/block={_smem // 1024} KB (< 200 KB): inductor persistent_reductions=False "
+            "so the RMSNorm compile fits shared memory"
+        )
 
 DEFAULT_SEQUENCE_LENGTH = 16_384
 DEFAULT_NUM_NODES = 1

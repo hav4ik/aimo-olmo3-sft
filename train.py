@@ -44,6 +44,7 @@ _MAP = [
     ("cp_style",           "OLMO_CP_STYLE",            "ring|ulysses"),
     ("lr",                 "LR",                       "learning rate"),
     ("ac_budget",          "OLMO_AC_BUDGET",           "activation-checkpointing: <0..1> budget (higher=faster/more mem), 'none', or unset=selected_modules"),
+    ("persistent_reductions", "OLMO_PERSISTENT_REDUCTIONS", "torch.compile RMSNorm reduction: 1=persistent (fast, needs ~200KB smem: Hopper/B200), 0=looped (fits small smem: RTX 6000/A100); unset=auto-detect from GPU smem"),
     ("sink",               "OLMO_USE_SINK",            "per-head attention sink 0|1"),
     ("sink_init",          "OLMO_SINK_INIT",           "initial sink logit (stock warm start only)"),
     ("hf_tokenizer",       "OLMO_HF_TOKENIZER",        "1=reuse model tokenizer, or an HF id"),
