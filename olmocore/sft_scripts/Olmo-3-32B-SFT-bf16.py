@@ -255,6 +255,33 @@ def glob_remote_dataset(prefix: str) -> List[str]:
     return paths
 
 
+def _read_hf_config(identifier: str) -> dict:
+    """Read a HF model's config.json (mirrors TokenizerConfig.from_hf's fetch; used for rope_scaling)."""
+    import json
+
+    from cached_path import cached_path
+
+    with cached_path(f"hf://{identifier}/config.json").open() as f:
+        return json.load(f)
+
+
+def _yarn_rope_scaling(hf_cfg: Optional[dict]) -> YaRNRoPEScalingConfig:
+    """YaRN scaling taken from the model's OWN config.json ``rope_scaling`` (so the factor matches how
+    the model was trained — e.g. factor 32 -> 262144 for the deepseek-transplant Olmo3), falling back
+    to the AI2 default (factor 8 -> 65536) when no HF model is given. olmo-core derives YaRN's
+    ``attention_factor`` from ``factor``, matching HF's stored value."""
+    if hf_cfg:
+        rs = hf_cfg.get("rope_scaling") or {}
+        if str(rs.get("rope_type", "")).lower() == "yarn":
+            return YaRNRoPEScalingConfig(
+                factor=float(rs["factor"]),
+                beta_fast=float(rs.get("beta_fast", 32)),
+                beta_slow=float(rs.get("beta_slow", 1)),
+                old_context_len=int(rs.get("original_max_position_embeddings", 8192)),
+            )
+    return YaRNRoPEScalingConfig(factor=8, beta_fast=32, beta_slow=1, old_context_len=8192)
+
+
 def build_sft_dataset(
     root_dir: str,
     tokenizer_config: TokenizerConfig,
@@ -386,6 +413,9 @@ class SFTConfig(Config):
         # It sizes the embedding/lm_head (padded_vocab_size) and gives the eos id used for intra-doc
         # masking, so it MUST match both the base checkpoint and how the .npy data was tokenized.
         _hf_tok = os.environ.get("OLMO_TOKENIZER_HF")
+        # Read the model's config.json once (when a HF model is given): its vocab drives the tokenizer
+        # and its rope_scaling drives YaRN below, so both always match how the model was trained.
+        _hf_cfg = _read_hf_config(_hf_tok) if _hf_tok else None
         tokenizer_config = TokenizerConfig.from_hf(_hf_tok) if _hf_tok else TokenizerConfig.dolma2()
         dataset_config = build_sft_dataset(
             root_dir=root_dir,
@@ -488,12 +518,13 @@ class SFTConfig(Config):
         if os.environ.get("OLMO_USE_SINK") == "1":
             model_overrides["use_sink"] = True
             model_overrides["sink_init"] = float(os.environ.get("OLMO_SINK_INIT", "0.0"))
+        # YaRN scaling from the model's own config.json (factor 32 -> 262144 for this model), or the
+        # AI2 default (factor 8 -> 65536) when no HF model is given. Reading it from the config means
+        # SEQ_LEN can be anything up to the model's trained max without a hardcoded factor mismatch.
         model = TransformerConfig.olmo3_32B(
             vocab_size=tokenizer_config.padded_vocab_size(),
             **model_overrides,
-        ).with_rope_scaling(
-            YaRNRoPEScalingConfig(factor=8, beta_fast=32, beta_slow=1, old_context_len=8192)
-        )
+        ).with_rope_scaling(_yarn_rope_scaling(_hf_cfg))
         # DIFF #5: OLMO_FUSED_LCE=1 opts into Liger fused-linear cross-entropy (no materialized
         # (T, vocab) logits, ~10 GB saved at seq 65536). DEFAULT OFF — measured on our setup it gives
         # ~6.5% HIGHER loss than the materialized reference (a Liger reduction-normalization
