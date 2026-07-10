@@ -91,6 +91,13 @@ _DEFAULTS = {
 
 
 def main():
+    # On Beaker (multi-node), bootstrap.sh's shim maps BEAKER_REPLICA_* -> WORLD_SIZE/GLOBAL_RANK/
+    # MASTER_ADDR. Drop train.py's single-node rendezvous DEFAULTS so they don't clobber that shim (every
+    # replica would otherwise think it's a 1-node job at 127.0.0.1). An explicit --nnodes/--node-rank/...
+    # still wins; non-Beaker single-node launches keep the defaults.
+    if os.environ.get("BEAKER_REPLICA_COUNT"):
+        for _k in ("nnodes", "node_rank", "master_addr", "master_port"):
+            _DEFAULTS.pop(_k, None)
     p = argparse.ArgumentParser(
         description="Single-command trainer CLI for the olmo-core SFT container.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,

@@ -1,72 +1,70 @@
 # Olmo-3 32B SFT (olmo-core) — run knobs reference
 
-## TL;DR — best setting for 128K context (32B, multi-node H100)
+## TL;DR — best setting for 128K context (32B) on AI2 Beaker
 
 128K needs Ulysses CP (activations don't fit otherwise) **and** the model sharded across enough GPUs to
 fit the optimizer floor. **cp8 (16384 tokens/rank) is the MAX Ulysses CP for 40 heads at 128K** (cp must
-divide both 40 and 131072 → only 1/2/4/8), so you fit by sharding wider, not by more CP. **Minimal
-command** (only the knobs that differ from defaults):
+divide both 40 and 131072 → only 1/2/4/8), so you fit by sharding wider, not by more CP.
 
-```bash
-# Run on EACH node. Per node: set GLOBAL_RANK=0..WORLD_SIZE-1; MASTER_ADDR = node 0's host.
-# NCCL_IB_HCA names are CLUSTER-SPECIFIC — NII's mlx5_ibn1..8 shown; AI2 jupiter = "^=mlx5_bond_0".
-docker run --rm \
-  --gpus all \
-  --ipc=host \
-  --cap-add=IPC_LOCK \
-  -v /dev/infiniband:/dev/infiniband \
-  -v /host/data:/data/training \
-  -e HF_TOKEN=$HF_TOKEN \
-  -e WANDB_API_KEY=$WANDB_API_KEY \
-  -e PYTORCH_ALLOC_CONF=expandable_segments:True \
-  -e WORLD_SIZE=8 \
-  -e GLOBAL_RANK=0 \
-  -e MASTER_ADDR=<node0-host> \
-  -e MASTER_PORT=29400 \
-  -e NCCL_IB_HCA=mlx5_ibn1,mlx5_ibn2,mlx5_ibn3,mlx5_ibn4,mlx5_ibn5,mlx5_ibn6,mlx5_ibn7,mlx5_ibn8 \
-  -e NCCL_IB_PCI_RELAXED_ORDERING=1 \
-  -e NCCL_CROSS_NIC=1 \
-  chankhavu/olmo3-olmocore:cu128-fa2-sink \
-  python /usr/local/bin/train.py \
-      --seq-len 131072 \
-      --max-tokens-per-rank 16384 \
-      --cp-style ulysses \
-      --ac-budget 0 \
-      --nodes-per-fsdp-group 2 \
-      --grad-reduce-dtype bf16 \
-      --gbs 4194304 \
-      --epochs 2
+Submit this Beaker spec (`beaker experiment create spec.yaml`) — 8 nodes × 8 H100 = 64 GPUs, model
+sharded across 4-node FSDP groups:
+
+```yaml
+version: v2
+budget: ai2/<your-budget>
+description: Olmo-3 32B SFT @ 128K
+tasks:
+- name: sft
+  image:
+    docker: chankhavu/olmo3-olmocore:cu128-fa2-sink
+  command:                                    # train.py --flags; it execs the entrypoint (rendezvous shim runs)
+  - python
+  - /usr/local/bin/train.py
+  - --seq-len=131072
+  - --max-tokens-per-rank=16384               # cp8 = 16384 tok/rank (max Ulysses CP for 40 heads @ 128K)
+  - --cp-style=ulysses
+  - --ac-budget=0.3
+  - --nodes-per-fsdp-group=4                  # shard the 32B floor across 4 nodes (32 GPUs)
+  - --grad-reduce-dtype=bf16
+  - --gbs=4194304
+  - --epochs=2
+  replicas: 8                                 # 8 nodes; × gpuCount 8 = 64 GPUs
+  leaderSelection: true                       # REQUIRED — the rendezvous shim needs the leader hostname
+  hostNetworking: true                        # REQUIRED for InfiniBand + WEKA-root writes
+  propagateFailure: true
+  propagatePreemption: true
+  synchronizedStartTimeout: 15m
+  resources:
+    gpuCount: 8                               # per node
+  constraints:
+    cluster: [ ai2/jupiter-cirrascale-2 ]     # H100 = sm_90
+  datasets:
+  - mountPath: /data/training
+    source: { weka: <your-weka-bucket> }      # ~1 TB read-write; checkpoints persist here
+  envVars:
+  - { name: HF_TOKEN,           secret: HF_TOKEN }
+  - { name: WANDB_API_KEY,      secret: WANDB_API_KEY }
+  - { name: PYTORCH_ALLOC_CONF, value: "expandable_segments:True" }
+  - { name: NCCL_SOCKET_IFNAME, value: ib }              # InfiniBand (jupiter)
+  - { name: NCCL_IB_HCA,        value: "^=mlx5_bond_0" }  # InfiniBand HCA (jupiter)
+  result:
+    path: /results                            # small logs only — NOT the 251 GB checkpoints
+  timeout: 48h
 ```
-(8-node / 64-GPU example; `WORLD_SIZE`=#**nodes** — not ranks — so 8 nodes × 8 GPUs = 64 GPUs. On
-**Beaker** you don't set the rendezvous by hand — the shim maps `BEAKER_REPLICA_*` and you use
-`hostNetworking: true`; on **Singularity/NII** swap the mount for `--bind /dev/infiniband:/dev/infiniband`.
-Details + AI2 fabric env below.)
 
-Per rank ≈ **24 GB floor + ~27 GB activations ≈ ~51 GB** → fits 80 GB H100 (needs ≥2 nodes; a single
-8-GPU node can't shard the floor past 8). `--nodes-per-fsdp-group 4` → ~12 GB floor / ~40 GB total for
-more headroom (more inter-node comm).
+- **Rendezvous is automatic** — `bootstrap.sh` maps `BEAKER_REPLICA_COUNT/RANK/LEADER_REPLICA_HOSTNAME` →
+  `WORLD_SIZE`/`GLOBAL_RANK`/`MASTER_ADDR` (needs `leaderSelection: true`). Nothing to set by hand.
+- **Memory** — shard across 4 nodes (32 GPUs) → ~12 GB optimizer floor; `--ac-budget 0.3` keeps more
+  activations (faster than 0), comfortable on 80 GB. Use `--nodes-per-fsdp-group 2` (~24 GB floor) for
+  fewer cross-node all-gathers, or push toward 8 for the lowest floor.
+- **InfiniBand** — `hostNetworking: true` exposes the fabric; the two `NCCL_*` vars point at jupiter's HCA
+  (`mlx5_bond_0`). The image already ships the user-space RDMA libs. Verify with `NCCL_DEBUG=INFO` →
+  expect `NET/IB` (not `NET/Socket`).
+- **Storage** — WEKA read-write at `/data/training`; checkpoints (~251 GB each, keep-3 ≈ 1 TB) persist
+  there and are retrievable from a follow-up job. Don't route them through a `result` dataset.
+- **Secrets** — `beaker secret write HF_TOKEN <val>` (+ `WANDB_API_KEY`) in the same workspace first.
 
-### Multi-node env
-On **Beaker** the image auto-maps the rendezvous — just set `replicas: N` + `leaderSelection: true` +
-`hostNetworking: true` in the spec; `bootstrap.sh` maps `BEAKER_REPLICA_COUNT/RANK/LEADER_REPLICA_HOSTNAME`
-→ `WORLD_SIZE`/`GLOBAL_RANK`/`MASTER_ADDR`. On **raw torchrun/docker**, set these per node instead:
-
-| Env | Meaning |
-|---|---|
-| `WORLD_SIZE` | number of **nodes** (not ranks) |
-| `GLOBAL_RANK` | this node's 0-based index in `[0, WORLD_SIZE)` |
-| `MASTER_ADDR` / `MASTER_PORT` | rendezvous host (node 0's address) / port (e.g. 29400) |
-| `OLMO_NODES_PER_FSDP_GROUP` | shard the model across N nodes (the memory lever — see table below) |
-
-**InfiniBand** (multi-node throughput — the image ships the user-space RDMA libs; you expose the devices
-and set the fabric env per cluster, else NCCL falls back to TCP sockets ~6× slower on the all-gather):
-- **Expose the IB devices:** Docker `--device /dev/infiniband` · Singularity `--bind
-  /dev/infiniband:/dev/infiniband` · Beaker `hostNetworking: true` (platform exposes it).
-- **Fabric env (HCA names are cluster-specific):**
-  - **NII** (8-rail): `NCCL_IB_HCA=mlx5_ibn1,mlx5_ibn2,mlx5_ibn3,mlx5_ibn4,mlx5_ibn5,mlx5_ibn6,mlx5_ibn7,mlx5_ibn8` `NCCL_IB_PCI_RELAXED_ORDERING=1` `NCCL_CROSS_NIC=1`
-  - **AI2 jupiter**: `NCCL_SOCKET_IFNAME=ib` `NCCL_IB_HCA=^=mlx5_bond_0`
-- **Verify it's active:** `NCCL_DEBUG=INFO` and look for `NET/IB` in the log (good) vs `NET/Socket` (fell
-  back to TCP — fabric env or device bind is wrong).
+skip_step + bf16 moments and fused-LCE are the defaults — no need to pass them.
 
 **Every knob for this run, and whether it's already the default** — the command passes the non-default
 knobs (plus `--epochs`/`--gbs`, called out because they matter); drop any to fall back, or add any
@@ -77,8 +75,8 @@ knobs (plus `--epochs`/`--gbs`, called out because they matter); drop any to fal
 | `--seq-len 131072` | 131072 | **no** (65536) | the context window |
 | `--max-tokens-per-rank 16384` | 16384 | **no** (auto) | → cp8; max CP for 40 heads @ 128K |
 | `--cp-style ulysses` | ulysses | **no** (ring) | **required** for sinks (ring rejects them) |
-| `--ac-budget 0` | 0 | **no** (selected_modules) | recompute everything |
-| `--nodes-per-fsdp-group 2` | 2 | **no** (1) | shard 32B floor across 16 GPUs |
+| `--ac-budget 0.3` | 0.3 | **no** (selected_modules) | AI2's 32B budget; keeps more activations than 0 (faster) |
+| `--nodes-per-fsdp-group 4` | 4 | **no** (1) | shard 32B floor across 4 nodes / 32 GPUs |
 | `--grad-reduce-dtype bf16` | bf16 | **no** (fp32) | ~8 GB/rank less |
 | `--optim skip_step` | skip_step | ✅ default | SkipStepAdamW spike protection |
 | `--optim-dtype bf16` | bf16 | ✅ default | bf16 moments, ~16 GB/rank less |
