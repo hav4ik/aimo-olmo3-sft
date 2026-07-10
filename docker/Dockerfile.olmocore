@@ -16,7 +16,11 @@ RUN set -e; d="$(dirname "$(find /opt/conda -name 'libnvrtc.so*' | head -1)")"; 
     echo "$d" > /etc/ld.so.conf.d/zz-nvrtc.conf && ldconfig && ldconfig -p | grep -q 'libnvrtc\.so'
 
 COPY bootstrap.sh /usr/local/bin/bootstrap.sh
-RUN chmod +x /usr/local/bin/bootstrap.sh && (command -v git >/dev/null || (apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*))
+# train.py: single-command CLI front-end (argparse --flags -> run env -> exec bootstrap). Lets you
+# `docker run … python /usr/local/bin/train.py --ac-budget 0.1 --dataset … --seq-len …` without the
+# host-side launcher or a pile of -e vars. In-container twin of olmocore/launch.sh.
+COPY train.py /usr/local/bin/train.py
+RUN chmod +x /usr/local/bin/bootstrap.sh /usr/local/bin/train.py && (command -v git >/dev/null || (apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*))
 
 # Context-parallel (ring) attention dependency. OLMo-core's FA2 backend requires ring-flash-attn for
 # CP — our DEFAULT path (cp=4 auto-engages at seq 65536). It's a pure-Python wrapper over the baked
