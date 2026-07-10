@@ -301,7 +301,31 @@ if [ "${OLMO_ATTN_SELFCHECK:-0}" = "1" ] && [ "$THIS_NODE_RANK" -eq 0 ]; then
         || { echo "[olmocore] ERROR: attention-sink self-check FAILED — aborting before training"; exit 7; }
 fi
 
-exec torchrun "${RDZV[@]}" --nproc_per_node="$NPROC" \
+# HuggingFace checkpoint upload watchdog (node 0 only). If OLMO_HF_UPLOAD_REPO is set, a background poll
+# loop converts each NEW complete distcp checkpoint -> HF (sink-preserving) and ships it to
+# <repo>/step<N>/, marking each so it's shipped once. CPU-only (CUDA_VISIBLE_DEVICES="") so it never
+# steals a training GPU. Needs HF_TOKEN with WRITE scope. Runtime-cloned (no image rebuild). After
+# training, the watcher is killed and a FINAL uncapped upload lands the end-of-run model at the repo root.
+UPLOAD_PY="$(dirname "$SFT_SCRIPT")/../upload.py"
+UPLOAD_WATCHER_PID=""
+trap '[ -n "$UPLOAD_WATCHER_PID" ] && kill "$UPLOAD_WATCHER_PID" 2>/dev/null || true' EXIT
+if [ -n "${OLMO_HF_UPLOAD_REPO:-}" ] && [ "$THIS_NODE_RANK" -eq 0 ]; then
+    if [ -z "${HF_TOKEN:-}" ]; then
+        echo "[olmocore] WARN: OLMO_HF_UPLOAD_REPO set but HF_TOKEN is empty — skipping upload watcher."
+    elif [ ! -f "$UPLOAD_PY" ]; then
+        echo "[olmocore] WARN: upload.py not found at $UPLOAD_PY — skipping upload watcher."
+    else
+        UPLOAD_LOG="${OLMO_SFT_SAVE_ROOT}/hf_upload_watcher.log"
+        echo "[olmocore] HF upload watcher -> ${OLMO_HF_UPLOAD_REPO} (poll ${OLMO_HF_UPLOAD_INTERVAL:-300}s, log $UPLOAD_LOG)"
+        CUDA_VISIBLE_DEVICES="" nohup python "$UPLOAD_PY" --watch \
+            --output "$OLMO_SFT_SAVE_ROOT" --repo "$OLMO_HF_UPLOAD_REPO" \
+            --seq-len "${SEQ_LEN:-65536}" --tokenizer "${OLMO_TOKENIZER_HF:-dolma2}" \
+            > "$UPLOAD_LOG" 2>&1 &
+        UPLOAD_WATCHER_PID=$!
+    fi
+fi
+
+torchrun "${RDZV[@]}" --nproc_per_node="$NPROC" \
     "$SFT_SCRIPT" \
     train "$RUN_NAME" "$CKPT" "${CLUSTER:-local_h100}" \
     --seq_len="${SEQ_LEN:-65536}" --num_nodes="$NNODES" \
@@ -310,3 +334,17 @@ exec torchrun "${RDZV[@]}" --nproc_per_node="$NPROC" \
     --train_module.optim.lr="${LR:-$DEF_LR}" \
     --trainer.max_duration.value="$DUR_VAL" --trainer.max_duration.unit="$DUR_UNIT" \
     ${EXTRA[@]+"${EXTRA[@]}"}
+TRAIN_RC=$?
+
+# Stop the watcher; then the FINAL uncapped upload (node 0, on success) lands the end-of-run model at the
+# repo ROOT (repo root == the deliverable model; intermediates stay under step<N>/).
+[ -n "$UPLOAD_WATCHER_PID" ] && kill "$UPLOAD_WATCHER_PID" 2>/dev/null || true
+if [ -n "${OLMO_HF_UPLOAD_REPO:-}" ] && [ "$THIS_NODE_RANK" -eq 0 ] && [ -n "${HF_TOKEN:-}" ] \
+        && [ -f "$UPLOAD_PY" ] && [ "$TRAIN_RC" -eq 0 ]; then
+    echo "[olmocore] final HF upload -> ${OLMO_HF_UPLOAD_REPO} (repo root = end-of-run model)"
+    CUDA_VISIBLE_DEVICES="" python "$UPLOAD_PY" --final \
+        --output "$OLMO_SFT_SAVE_ROOT" --repo "$OLMO_HF_UPLOAD_REPO" \
+        --seq-len "${SEQ_LEN:-65536}" --tokenizer "${OLMO_TOKENIZER_HF:-dolma2}" \
+        || echo "[olmocore] WARN: final HF upload failed — the distcp checkpoint is still on disk/WEKA."
+fi
+exit "$TRAIN_RC"

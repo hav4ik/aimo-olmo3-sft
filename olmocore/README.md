@@ -47,6 +47,7 @@ tasks:
   - { name: PYTORCH_ALLOC_CONF, value: "expandable_segments:True" }
   - { name: NCCL_SOCKET_IFNAME, value: ib }              # InfiniBand (jupiter)
   - { name: NCCL_IB_HCA,        value: "^=mlx5_bond_0" }  # InfiniBand HCA (jupiter)
+  - { name: OLMO_HF_UPLOAD_REPO, value: <hf-user>/olmo3-32b-sft-128k }  # auto-ship each ckpt to HF (HF_TOKEN needs WRITE scope)
   result:
     path: /results                            # small logs only — NOT the 251 GB checkpoints
   timeout: 48h
@@ -288,6 +289,21 @@ LSE per query**, so: cp=1 ✅, **Ulysses** ✅ (full seq per head-slice), **ring
 On disk at once ≈ `keep_last` persistent + 1 ephemeral. 32B distcp ≈ **251 GB each**, so **keep-3 ≈
 ~1 TB** — confirm the FS has room, or drop to `--keep-ckpts 1` on a tight disk. Keeping the last few
 also feeds checkpoint-soup / TIES merging.
+
+### Auto-upload to HuggingFace (`--hf-upload-repo` / `OLMO_HF_UPLOAD_REPO`)
+Set a repo id and a **node-0 background watchdog** (`olmocore/upload.py`, ported from the Fields FP8
+pipeline) polls the checkpoint dir every `OLMO_HF_UPLOAD_INTERVAL` s (default 300); for each **new
+complete** distcp checkpoint it converts distcp→HF (**sink-preserving** — via the sink-aware
+`save_hf_model`), shards the safetensors, and uploads to `<repo>/step<N>/`, writing an
+`upload_successful.txt` marker so each ships once. At end of run a **final uncapped upload** lands the
+end-of-run model at the **repo root** (so `AutoModel.from_pretrained("<repo>")` gives the final model;
+intermediates live under `step<N>/`). This is how you pull the model **out of the cluster** — otherwise
+checkpoints only sit on WEKA/local disk.
+
+- Needs **`HF_TOKEN` with WRITE scope**. Repo is **private** by default (`OLMO_HF_UPLOAD_PRIVATE=0` for public).
+- CPU-only (`CUDA_VISIBLE_DEVICES=""`) so it never steals a training GPU; convert+ship bounded by
+  `OLMO_HF_UPLOAD_TIMEOUT` (default 5400 s) so a wedged upload can't stall the loop.
+- Runtime-cloned (`run.sh` + `upload.py`) — **works with the current image, no rebuild.**
 
 ---
 

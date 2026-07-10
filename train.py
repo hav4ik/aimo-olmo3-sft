@@ -60,6 +60,8 @@ _MAP = [
     ("keep_ckpts",         "OLMO_KEEP_LAST_CKPTS",     "max persistent checkpoints kept on disk, oldest deleted (default 3 for 32B ~= 1TB; 0=keep all)"),
     ("save_interval",      "OLMO_SAVE_INTERVAL",       "steps between PERSISTENT checkpoints (default 1000)"),
     ("ephemeral_interval", "OLMO_EPHEMERAL_INTERVAL",  "steps between EPHEMERAL (rotating resume) checkpoints; must be < save-interval (default 500)"),
+    ("hf_upload_repo",     "OLMO_HF_UPLOAD_REPO",      "HF model repo id (e.g. user/olmo3-32b-sft-128k) — a node-0 watchdog converts+ships each new checkpoint to <repo>/step<N>/ and the final model to the repo root. Needs HF_TOKEN with WRITE scope. Unset = no upload"),
+    ("hf_upload_interval", "OLMO_HF_UPLOAD_INTERVAL",  "seconds between upload-watchdog polls (default 300)"),
     ("self_check",         "OLMO_ATTN_SELFCHECK",      "1=run the attention-sink kernel self-check before training"),
     ("wandb_project",      "WANDB_PROJECT",            "Weights & Biases project name"),
     ("wandb_entity",       "WANDB_ENTITY",             "Weights & Biases entity/team"),
