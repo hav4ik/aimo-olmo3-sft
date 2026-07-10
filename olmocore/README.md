@@ -10,17 +10,32 @@ command** (only the knobs that differ from defaults):
 ```bash
 # Run on EACH node. Per node: set GLOBAL_RANK=0..WORLD_SIZE-1; MASTER_ADDR = node 0's host.
 # NCCL_IB_HCA names are CLUSTER-SPECIFIC — NII's mlx5_ibn1..8 shown; AI2 jupiter = "^=mlx5_bond_0".
-docker run --rm --gpus all --ipc=host --cap-add=IPC_LOCK \
-  -v /dev/infiniband:/dev/infiniband -v /host/data:/data/training \
-  -e HF_TOKEN=$HF_TOKEN -e PYTORCH_ALLOC_CONF=expandable_segments:True \
-  -e WORLD_SIZE=2 -e GLOBAL_RANK=0 -e MASTER_ADDR=<node0-host> -e MASTER_PORT=29400 \
+docker run --rm \
+  --gpus all \
+  --ipc=host \
+  --cap-add=IPC_LOCK \
+  -v /dev/infiniband:/dev/infiniband \
+  -v /host/data:/data/training \
+  -e HF_TOKEN=$HF_TOKEN \
+  -e WANDB_API_KEY=$WANDB_API_KEY \
+  -e PYTORCH_ALLOC_CONF=expandable_segments:True \
+  -e WORLD_SIZE=2 \
+  -e GLOBAL_RANK=0 \
+  -e MASTER_ADDR=<node0-host> \
+  -e MASTER_PORT=29400 \
   -e NCCL_IB_HCA=mlx5_ibn1,mlx5_ibn2,mlx5_ibn3,mlx5_ibn4,mlx5_ibn5,mlx5_ibn6,mlx5_ibn7,mlx5_ibn8 \
-  -e NCCL_IB_PCI_RELAXED_ORDERING=1 -e NCCL_CROSS_NIC=1 \
+  -e NCCL_IB_PCI_RELAXED_ORDERING=1 \
+  -e NCCL_CROSS_NIC=1 \
   chankhavu/olmo3-olmocore:cu128-fa2-sink \
   python /usr/local/bin/train.py \
-      --seq-len 131072 --max-tokens-per-rank 16384 --cp-style ulysses \
-      --ac-budget 0 --nodes-per-fsdp-group 2 --grad-reduce-dtype bf16 \
-      --gbs 4194304 --epochs 2
+      --seq-len 131072 \
+      --max-tokens-per-rank 16384 \
+      --cp-style ulysses \
+      --ac-budget 0 \
+      --nodes-per-fsdp-group 2 \
+      --grad-reduce-dtype bf16 \
+      --gbs 4194304 \
+      --epochs 2
 ```
 (2-node example; `WORLD_SIZE`=#nodes. On **Beaker** you don't set the rendezvous by hand — the shim maps
 `BEAKER_REPLICA_*` and you use `hostNetworking: true`; on **Singularity/NII** swap the mount for
