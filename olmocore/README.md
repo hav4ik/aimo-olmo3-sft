@@ -19,7 +19,7 @@ docker run --rm \
   -e HF_TOKEN=$HF_TOKEN \
   -e WANDB_API_KEY=$WANDB_API_KEY \
   -e PYTORCH_ALLOC_CONF=expandable_segments:True \
-  -e WORLD_SIZE=2 \
+  -e WORLD_SIZE=8 \
   -e GLOBAL_RANK=0 \
   -e MASTER_ADDR=<node0-host> \
   -e MASTER_PORT=29400 \
@@ -37,9 +37,10 @@ docker run --rm \
       --gbs 4194304 \
       --epochs 2
 ```
-(2-node example; `WORLD_SIZE`=#nodes. On **Beaker** you don't set the rendezvous by hand — the shim maps
-`BEAKER_REPLICA_*` and you use `hostNetworking: true`; on **Singularity/NII** swap the mount for
-`--bind /dev/infiniband:/dev/infiniband`. Details + AI2 fabric env below.)
+(8-node / 64-GPU example; `WORLD_SIZE`=#**nodes** — not ranks — so 8 nodes × 8 GPUs = 64 GPUs. On
+**Beaker** you don't set the rendezvous by hand — the shim maps `BEAKER_REPLICA_*` and you use
+`hostNetworking: true`; on **Singularity/NII** swap the mount for `--bind /dev/infiniband:/dev/infiniband`.
+Details + AI2 fabric env below.)
 
 Per rank ≈ **24 GB floor + ~27 GB activations ≈ ~51 GB** → fits 80 GB H100 (needs ≥2 nodes; a single
 8-GPU node can't shard the floor past 8). `--nodes-per-fsdp-group 4` → ~12 GB floor / ~40 GB total for
