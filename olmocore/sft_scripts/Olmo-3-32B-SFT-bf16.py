@@ -653,11 +653,18 @@ class SFTConfig(Config):
                 log.warning("OLMO_OPTIM_DTYPE applies only to the skip_step optimizer; fused AdamW keeps fp32 state")
             optim_config = AdamWConfig(lr=8e-05, weight_decay=0.0, betas=(0.9, 0.95), fused=True)
         elif _optim == "adamw8bit":
-            # bitsandbytes 8-bit paged AdamW (Yi-Chia's optimizer): ~24 GB/rank less than fp32 AdamW.
-            if _opt_dt is not None:
-                log.warning("OLMO_OPTIM_DTYPE is ignored for adamw8bit (moments are already 8-bit)")
-            optim_config = PagedAdamW8bitConfig(lr=8e-05, weight_decay=0.0, betas=(0.9, 0.95))
-            log.info("optimizer = bitsandbytes PagedAdamW8bit (8-bit moments; ~24 GB/rank less than fp32 AdamW)")
+            # bitsandbytes 8-bit paged AdamW is INCOMPATIBLE with FSDP2. Its blockwise update kernel
+            # (optimizer_update_8bit_blockwise) is handed the model's DTensor-sharded params and raises
+            # "got mixed torch.Tensor and DTensor" — bnb has no DTensor support. This recipe ALWAYS uses
+            # FSDP2 (HSDP), so 8-bit AdamW cannot run here. It's a DTensor issue, not a kernel-arch one,
+            # so it fails identically on sm_90/H100 (not just sm_120). Fail loud at config time instead of
+            # crashing after the slow model build + first step.
+            raise OLMoConfigurationError(
+                "OLMO_OPTIM=adamw8bit (bitsandbytes PagedAdamW8bit) is incompatible with FSDP2: its 8-bit "
+                "update kernel does not support DTensor-sharded params ('optimizer_update_8bit_blockwise "
+                "got mixed torch.Tensor and DTensor'). Use OLMO_OPTIM=skip_step with OLMO_OPTIM_DTYPE=bf16 "
+                "(~16 GB/rank less, fp32 master kept) or OLMO_OPTIM=fused_adamw."
+            )
         elif _optim == "skip_step":
             optim_config = SkipStepAdamWConfig(
                 lr=8e-05, weight_decay=0.0, betas=(0.9, 0.95), compile=False, dtype=_opt_dt
@@ -670,12 +677,14 @@ class SFTConfig(Config):
         # Checkpoint cadence + retention (env-tunable). Persistent every OLMO_SAVE_INTERVAL steps,
         # ephemeral (rotating resume points) every OLMO_EPHEMERAL_INTERVAL. OLMO_KEEP_LAST_CKPTS caps
         # PERSISTENT checkpoints on disk via olmo-core's NATIVE CheckpointerCallback.max_checkpoints
-        # (upstream #694) — deletes the oldest when a new one exceeds the cap. run.sh defaults it per
-        # model size since distcp checkpoints are ~100 GB (7B) / ~450 GB (32B) and the budget is ~1 TB.
-        # 0 = keep all (max_checkpoints=None). ephemeral_interval must be < save_interval (olmo-core asserts).
+        # (upstream #694) — deletes the oldest when a new one exceeds the cap. Default 3 (run.sh sets it
+        # per size; 32B distcp is ~251 GB so keep-3 ≈ 3×251 persistent + 1×251 ephemeral ≈ 1 TB — make
+        # sure the target FS has room, or drop to OLMO_KEEP_LAST_CKPTS=1). Keeping the last few also
+        # feeds checkpoint-soup / TIES merging. 0 = keep all (max_checkpoints=None). ephemeral_interval
+        # must be < save_interval (olmo-core asserts).
         _save_interval = int(os.environ.get("OLMO_SAVE_INTERVAL", "1000"))
         _ephemeral_interval = int(os.environ.get("OLMO_EPHEMERAL_INTERVAL", "500"))
-        _keep_last = int(os.environ.get("OLMO_KEEP_LAST_CKPTS", "0"))
+        _keep_last = int(os.environ.get("OLMO_KEEP_LAST_CKPTS", "3"))
 
         config = SFTConfig(
             run_name=run_name,

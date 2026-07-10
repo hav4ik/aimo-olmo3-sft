@@ -62,7 +62,7 @@ MODEL_SIZE="${MODEL_SIZE:-7b}"
 case "$MODEL_SIZE" in
     1b)  HF_MODEL="${HF_MODEL:-allenai/OLMo-2-0425-1B-Instruct}"; MODEL_ARCH="${MODEL_ARCH:-olmo2_1b_v2}"; DEF_LR=5e-5; DEF_GBS=4096;    DEF_KEEP=1; DEF_SFT=Olmo-2-1B-SFT-local.py;  DEF_SEQ_LEN=4096 ;;
     7b)  HF_MODEL="${HF_MODEL:-allenai/Olmo-3-7B-Think}";    MODEL_ARCH="${MODEL_ARCH:-olmo3_7b}";  DEF_LR=5e-5; DEF_GBS=1572864; DEF_KEEP=2; DEF_SFT=Olmo-3-7B-SFT-local.py;  DEF_SEQ_LEN=65536 ;;  # GBS 1.5M == 32B (divides for WORLD_SIZE 2/3/4/6 at cp=4)
-    32b) HF_MODEL="${HF_MODEL:-allenai/Olmo-3.1-32B-Think}"; MODEL_ARCH="${MODEL_ARCH:-olmo3_32b}"; DEF_LR=5e-5; DEF_GBS=1572864; DEF_KEEP=1; DEF_SFT=Olmo-3-32B-SFT-local.py; DEF_SEQ_LEN=65536 ;;  # GBS 1.5M = 1572864 -> divides for WORLD_SIZE 2/3/4/6 (cp=4); lr 5e-5 sits between linear/sqrt scaling of AI2's 1e-4@4.19M
+    32b) HF_MODEL="${HF_MODEL:-allenai/Olmo-3.1-32B-Think}"; MODEL_ARCH="${MODEL_ARCH:-olmo3_32b}"; DEF_LR=5e-5; DEF_GBS=1572864; DEF_KEEP=3; DEF_SFT=Olmo-3-32B-SFT-local.py; DEF_SEQ_LEN=65536 ;;  # GBS 1.5M = 1572864 -> divides for WORLD_SIZE 2/3/4/6 (cp=4); lr 5e-5 sits between linear/sqrt scaling of AI2's 1e-4@4.19M
     *)   echo "ERROR: MODEL_SIZE='$MODEL_SIZE' (want 1b|7b|32b)"; exit 2 ;;
 esac
 # FP8-FREE 32B recipe: SFT_SCRIPT_NAME=Olmo-3-32B-SFT-bf16.py MODEL_SIZE=32b — a copy of the 32B
@@ -105,6 +105,20 @@ hf_retry() {
     done
 }
 
+# `hf download` coordinates its cache with filelock. A download hard-killed mid-setup (job/container torn
+# down, node preempted) can leave an ORPHANED *.lock under <local-dir>/.cache/huggingface that a shared FS
+# (Lustre) never releases — so the NEXT download deadlocks forever ("Still waiting to acquire lock on
+# .gitignore.lock", Fetching 0/N). Only rank 0 downloads (gated below), so any lock present here has no live
+# owner and is safe to clear before we start. Covers both the .gitignore.lock and the per-file .locks/*.lock.
+clear_hf_locks() {
+    local d="$1" n
+    [ -n "$d" ] && [ -d "$d/.cache" ] || return 0
+    n=$(find "$d/.cache" -name '*.lock' -type f 2>/dev/null | wc -l | tr -d ' ')
+    [ "${n:-0}" -gt 0 ] || return 0
+    echo "[olmocore] clearing $n stale hf lock(s) under $d/.cache (orphaned by a killed download)"
+    find "$d/.cache" -name '*.lock' -type f -delete 2>/dev/null || true
+}
+
 # One-time HF -> OLMo-core distcp conversion, cached on the /data/training volume. OLMo-core
 # can't load HF weights directly; the distcp format reshards on LOAD, so this single-process
 # convert loads onto any GPU/node count later. Same image converts AND loads => self-consistent
@@ -124,6 +138,7 @@ if [ "${STAGE:-train}" = "convert" ] || [ ! -f "$CONVERT_DONE" ]; then
         if [ ! -d "$HF_MODEL" ]; then
             CONV_SRC="$DATA/hf_models/$HF_MODEL"
             echo "[olmocore] staging HF model $HF_MODEL -> $CONV_SRC"
+            clear_hf_locks "$CONV_SRC"
             hf_retry hf download "$HF_MODEL" --local-dir "$CONV_SRC"
         fi
         # Attention sink: build the OLMo-core model WITH sinks so a sink-baked HF checkpoint
@@ -220,6 +235,7 @@ if ! ls "$DATASET"/token_ids_part_*.npy >/dev/null 2>&1; then
         HF_ARGS=(--repo-type dataset --local-dir "$DL_DIR")
         [ -n "$SUB" ] && HF_ARGS+=(--include "$SUB/*")
         [ -n "${DATASET_REVISION:-}" ] && HF_ARGS+=(--revision "$DATASET_REVISION")
+        clear_hf_locks "$DL_DIR"
         hf_retry hf download "$DATASET_HF" "${HF_ARGS[@]}"
         ls "$DATASET"/token_ids_part_*.npy >/dev/null 2>&1 || { echo "ERROR: $DATASET_HF (subdir ${SUB:-/}) has no token_ids_part_*.npy at $DATASET"; exit 3; }
         touch "$DATA_READY"
