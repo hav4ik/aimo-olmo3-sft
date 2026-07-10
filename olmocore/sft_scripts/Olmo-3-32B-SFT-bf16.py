@@ -309,64 +309,6 @@ def build_sft_dataset(
 
 
 @dataclass
-class KeepLastNCheckpoints(Callback):
-    """DIFF #9: cap PERSISTENT (save_interval) checkpoints on disk to `keep_last`, deleting the oldest
-    as new ones are written. olmo-core's CheckpointerCallback only auto-prunes EPHEMERAL checkpoints,
-    so persistent ones (distcp ~100 GB/7B, ~450 GB/32B) accumulate unbounded and blow a fixed storage
-    budget. We delete only checkpoints older than the keep window (long finalized) — never the most
-    recent N — so async saves and resume are unaffected. The final end-of-training checkpoint (saved
-    at the last step, not an interval) counts toward the cap. keep_last<=0 disables. save_interval MUST
-    match the CheckpointerCallback's so persistent saves are tagged (ephemeral steps are skipped)."""
-
-    keep_last: int = 0
-    save_interval: int = 1000
-    _persistent: List[str] = field(default_factory=list)
-
-    def _persistent_step(self, path) -> Optional[int]:
-        """The step if `path` is a PERSISTENT checkpoint, else None — derived from the checkpoint
-        DIRECTORY NAME (step<N>), NOT self.step. Checkpoint saves are async by default
-        (save_async=backend_supports_cpu()), so post_checkpoint_saved fires from the save future's
-        done-callback LONG after self.step (==trainer.global_step) has advanced past the save_interval
-        boundary. Keying retention off self.step would (almost) never match a persistent step, so
-        persistent checkpoints would never be tracked or pruned and would accumulate unbounded."""
-        name = str(path).rstrip("/").split("/")[-1]
-        if not (name.startswith("step") and name[4:].isdigit()):
-            return None
-        step = int(name[4:])
-        if self.save_interval > 0 and step % self.save_interval == 0:
-            return step
-        max_steps = getattr(self.trainer, "max_steps", None)  # the end-of-training checkpoint
-        return step if (max_steps is not None and step == max_steps) else None
-
-    def pre_train(self):
-        if self.keep_last <= 0:
-            return
-        try:  # on resume, seed from persistent checkpoints already on disk so they're pruned too
-            found = []
-            for p in list_directory(self.trainer.save_folder):
-                name = str(p).rstrip("/").split("/")[-1]
-                if name.startswith("step") and name[4:].isdigit() and int(name[4:]) % self.save_interval == 0:
-                    found.append((int(name[4:]), str(p)))
-            self._persistent = [p for _, p in sorted(found)]
-            if self._persistent:
-                log.info(f"[retention] tracking {len(self._persistent)} existing persistent checkpoint(s)")
-        except Exception as e:  # noqa: BLE001
-            log.warning(f"[retention] could not scan existing checkpoints: {e}")
-
-    def post_checkpoint_saved(self, path):
-        if self.keep_last <= 0 or self._persistent_step(path) is None:
-            return  # ephemeral / unrecognized -> olmo-core's CheckpointerCallback manages those
-        self._persistent.append(str(path))
-        while len(self._persistent) > self.keep_last:
-            old = self._persistent.pop(0)
-            if get_fs_local_rank() == 0:
-                log.info(f"[retention] pruning old persistent checkpoint {old} (keep_last={self.keep_last})")
-                self.trainer.run_bookkeeping_op(
-                    clear_directory, old, op_name=f"prune_checkpoint {old}", distributed=False
-                )
-
-
-@dataclass
 class SFTConfig(Config):
     """
     Custom config class for the sft run.
@@ -569,9 +511,10 @@ class SFTConfig(Config):
 
         # Checkpoint cadence + retention (env-tunable). Persistent every OLMO_SAVE_INTERVAL steps,
         # ephemeral (rotating resume points) every OLMO_EPHEMERAL_INTERVAL. OLMO_KEEP_LAST_CKPTS caps
-        # PERSISTENT checkpoints on disk (olmo-core only auto-prunes ephemeral); run.sh defaults it per
+        # PERSISTENT checkpoints on disk via olmo-core's NATIVE CheckpointerCallback.max_checkpoints
+        # (upstream #694) — deletes the oldest when a new one exceeds the cap. run.sh defaults it per
         # model size since distcp checkpoints are ~100 GB (7B) / ~450 GB (32B) and the budget is ~1 TB.
-        # 0 = keep all. ephemeral_interval must be < save_interval (olmo-core asserts this).
+        # 0 = keep all (max_checkpoints=None). ephemeral_interval must be < save_interval (olmo-core asserts).
         _save_interval = int(os.environ.get("OLMO_SAVE_INTERVAL", "1000"))
         _ephemeral_interval = int(os.environ.get("OLMO_EPHEMERAL_INTERVAL", "500"))
         _keep_last = int(os.environ.get("OLMO_KEEP_LAST_CKPTS", "0"))
@@ -644,12 +587,11 @@ class SFTConfig(Config):
                 CheckpointerCallback(
                     save_interval=_save_interval,
                     ephemeral_save_interval=_ephemeral_interval,
+                    # Native retention (olmo-core #694): keep the last N PERSISTENT checkpoints, deleting
+                    # the oldest as new ones are written. OLMO_KEEP_LAST_CKPTS=0 => keep all (None).
+                    max_checkpoints=_keep_last if _keep_last > 0 else None,
                     save_async=True,
                 ),
-            )
-            .with_callback(
-                "checkpoint_retention",
-                KeepLastNCheckpoints(keep_last=_keep_last, save_interval=_save_interval),
             )
             .with_callback(
                 "wandb",
