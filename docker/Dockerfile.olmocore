@@ -62,8 +62,12 @@ RUN if [ -n "${VERIFY_CUDA_MAX}" ]; then \
 
 # Code is cloned into the mounted run storage at runtime (single source = the git ref); pin a run
 # with CODE_REF=<branch|tag|commit>. CODE_DIR must live on a writable mount (the bound /data/training).
+# CODE_BRANCH is the fallback ref when CODE_REF is unset. This is the fa2-sink image, so it MUST
+# default to the sink working branch — the old olmo3-sft branch has NONE of the sink/CP/optim work
+# (no smem guard, no Ulysses intra-doc RoPE fix, no sink read/train/export) and a run on it silently
+# regresses. train.py already passes --code-ref; this default covers a bare-entrypoint launch.
 ENV CODE_REPO=https://github.com/hav4ik/aimo-olmo3-sft \
-    CODE_BRANCH=olmo3-sft \
+    CODE_BRANCH=olmocore-cu128-fa2-sink \
     CODE_DIR=/data/training/code \
     HF_HOME=/data/training/hf_cache \
     SFT_FRAMEWORK=olmocore

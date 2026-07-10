@@ -75,6 +75,7 @@ def build_launch_config(**kwargs):
 # --- end local stubs ---
 from olmo_core.io import clear_directory, copy_dir, dir_is_empty, get_parent, join_path, list_directory
 from olmo_core.nn.attention import AttentionBackendName  # DIFF #4 (env attn backend)
+from olmo_core.nn.layer_norm import LayerNormType
 from olmo_core.nn.rope import YaRNRoPEScalingConfig
 from olmo_core.nn.transformer import TransformerConfig
 from olmo_core.optim import AdamWConfig, CosWithWarmup, OptimConfig, SkipStepAdamWConfig
@@ -112,21 +113,32 @@ log = logging.getLogger(__name__)
 # datacenter Blackwell B200 ~227 KB) fit it; smaller ones do NOT and inductor raises "No valid triton
 # configs / out of resource: shared memory" at compile time. This is NOT a compute-capability question —
 # the RTX 6000 Blackwell is sm_120 (HIGHER cc than Hopper's sm_90) but only ~99 KB smem, and the A100 is
-# sm_80 with ~163 KB — both too small. So gate on the ACTUAL shared_memory_per_block_optin (this is the
-# exact "Hardware limit" inductor reports). Below the persistent-RMSNorm need -> LOOPED reductions so
-# compile stays on (tiny end-to-end cost — norms are ~1-2% of runtime). OLMO_PERSISTENT_REDUCTIONS=1/0
-# forces the choice explicitly.
+# sm_80 with ~163 KB — both too small. Gate on the ACTUAL shared_memory_per_block_optin (the exact
+# "Hardware limit" inductor reports).
+_SMEM_OPTIN = (
+    getattr(torch.cuda.get_device_properties(0), "shared_memory_per_block_optin", 0)
+    if torch.cuda.is_available()
+    else 0
+)
+# True on GPUs whose opt-in smem/block can't hold the ~196 KB persistent RMSNorm (RTX 6000 ~99 KB,
+# A100 ~163 KB); False on Hopper H100 / datacenter Blackwell B200 (~227 KB).
+_SMALL_SMEM = bool(_SMEM_OPTIN and _SMEM_OPTIN < 200 * 1024)
+
+# NOTE: setting persistent_reductions=False is NOT sufficient — for the fused (residual-add + wide
+# RMSNorm) op inductor STILL emits a persistent reduction and compile dies (observed on the RTX 6000:
+# Required 196680 > limit 101376). The real fix is `fused_rms` at the model-build site below, which
+# routes the wide norms through flash-attn's hand-tiled Triton kernel instead of inductor codegen. We
+# still flip the flag here as defence-in-depth for any OTHER wide reduction inductor might try.
+# OLMO_PERSISTENT_REDUCTIONS=1/0 forces the choice explicitly.
 _pr = os.environ.get("OLMO_PERSISTENT_REDUCTIONS")
 if _pr is not None:
     torch._inductor.config.triton.persistent_reductions = _pr == "1"
-elif torch.cuda.is_available():
-    _smem = getattr(torch.cuda.get_device_properties(0), "shared_memory_per_block_optin", 0)
-    if _smem and _smem < 200 * 1024:  # < ~200 KB can't fit the persistent RMSNorm (~196 KB)
-        torch._inductor.config.triton.persistent_reductions = False
-        log.info(
-            f"GPU smem/block={_smem // 1024} KB (< 200 KB): inductor persistent_reductions=False "
-            "so the RMSNorm compile fits shared memory"
-        )
+elif _SMALL_SMEM:
+    torch._inductor.config.triton.persistent_reductions = False
+    log.info(
+        f"GPU smem/block={_SMEM_OPTIN // 1024} KB (< 200 KB): inductor persistent_reductions=False "
+        "(defence-in-depth; the wide RMSNorm is handled by fused_rms — see model build)"
+    )
 
 @OptimConfig.register("paged_adamw8bit")
 @dataclass
@@ -510,6 +522,31 @@ class SFTConfig(Config):
             vocab_size=tokenizer_config.padded_vocab_size(),
             **model_overrides,
         ).with_rope_scaling(_yarn_rope_scaling(_hf_cfg))
+        # Wide RMSNorm (over d_model=5120) can't compile as a persistent reduction on GPUs with
+        # <~200 KB opt-in smem, and persistent_reductions=False does NOT reliably force a looped kernel
+        # for this fused (residual-add + norm) op — inductor still emits a persistent reduction and
+        # compile dies with "out of resource: shared memory" (196680 > 101376 on the RTX 6000). Swap the
+        # two wide norms (block + lm_head) to FusedRMSNorm, which calls flash-attn's hand-tiled Triton
+        # rms_norm kernel (no giant smem tile; residual add stays a separate cheap op) instead of relying
+        # on inductor codegen. Same fp32 RMSNorm math. QK-norm (over head_dim) is narrow -> left as-is.
+        # Auto-on where smem is small (RTX 6000); Hopper/B200 keep the stock `rms` path unchanged.
+        # OLMO_FUSED_RMSNORM=1/0 forces it.
+        _frn = os.environ.get("OLMO_FUSED_RMSNORM")
+        if (_frn == "1") if _frn is not None else _SMALL_SMEM:
+            # NB: block.layer_norm, lm_head.layer_norm and the (narrow) qk_norm share ONE
+            # LayerNormConfig instance, so mutate a COPY per wide site — otherwise qk_norm (over
+            # head_dim) flips too. qk_norm has no smem issue and fused_rms on per-head qk-norm is
+            # unvalidated, so leave it on stock `rms`.
+            import dataclasses as _dc
+
+            model.block.layer_norm = _dc.replace(model.block.layer_norm, name=LayerNormType.fused_rms)
+            model.lm_head.layer_norm = _dc.replace(
+                model.lm_head.layer_norm, name=LayerNormType.fused_rms
+            )
+            log.info(
+                "Wide RMSNorm (block + lm_head) -> FusedRMSNorm (flash-attn Triton) to avoid the "
+                "inductor persistent-reduction shared-memory OOM at compile; qk_norm kept as rms"
+            )
         # DIFF #5: OLMO_FUSED_LCE=1 opts into Liger fused-linear cross-entropy (no materialized
         # (T, vocab) logits, ~10 GB saved at seq 65536). DEFAULT OFF — measured on our setup it gives
         # ~6.5% HIGHER loss than the materialized reference (a Liger reduction-normalization

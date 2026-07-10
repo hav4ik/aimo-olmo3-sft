@@ -171,9 +171,17 @@ Two RTX-6000-specific walls after the CP fix (both tunable, neither a correctnes
 - If cp8 + `--ac-budget 0` still OOMs, the 64 GB optimizer floor is the wall → 8-bit AdamW or multi-node.
 
 **2. Triton shared-memory OOM at compile** (`No valid triton configs / out of resource: shared memory`,
-Required 196680 > limit ~101376). RMSNorm over the 5120-wide hidden dim compiles to a *persistent*
-reduction that loads the full row into shared memory (~196 KB). **Hopper (~228 KB smem/block) fits it;
-the RTX 6000 (~99 KB) does not.** The sft script now auto-sets
-`torch._inductor.config.triton.persistent_reductions=False` off Hopper (looped reductions fit smem;
-end-to-end cost <1% since norms are ~1-2% of runtime). Force with `OLMO_PERSISTENT_REDUCTIONS=0/1`.
-Eager fallback (no compile): `-e TORCHDYNAMO_DISABLE=1` (drop `--ac-budget`; budget mode needs compile).
+Required 196680 > limit ~101376). The wide RMSNorm (over the 5120 hidden dim), fused with the residual
+add, compiles to a *persistent* reduction that loads the full row into shared memory (~196 KB).
+**Hopper/B200 (~228 KB smem/block) fit it; the RTX 6000 (~99 KB) and A100 (~163 KB) do not.**
+
+⚠️ Setting `torch._inductor.config.triton.persistent_reductions=False` is **NOT sufficient** — for this
+fused (residual-add + norm) op inductor still emits a persistent reduction and compile dies anyway
+(confirmed on the RTX 6000). **The real fix: `fused_rms`.** The sft script auto-swaps the two wide norms
+(`block.layer_norm`, `lm_head.layer_norm`) to `FusedRMSNorm`, which calls flash-attn's hand-tiled Triton
+`rms_norm` kernel (no giant smem tile; residual add stays a separate cheap op) instead of inductor
+codegen — same fp32 RMSNorm math. qk_norm (over head_dim) is narrow and left as stock `rms`. Auto-on when
+`shared_memory_per_block_optin < 200 KB`; Hopper/B200 keep stock `rms`. Force with `--fused-rmsnorm 1/0`
+(`OLMO_FUSED_RMSNORM`). The `persistent_reductions` flag is still flipped as defence-in-depth for any
+other wide reduction. Eager fallback (no compile at all): `-e TORCHDYNAMO_DISABLE=1` (drop `--ac-budget`;
+budget mode needs compile).
