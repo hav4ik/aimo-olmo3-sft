@@ -15,6 +15,13 @@ FROM ${BASE}
 RUN set -e; d="$(dirname "$(find /opt/conda -name 'libnvrtc.so*' | head -1)")"; \
     echo "$d" > /etc/ld.so.conf.d/zz-nvrtc.conf && ldconfig && ldconfig -p | grep -q 'libnvrtc\.so'
 
+# The base pins torch==2.10.0 but left torchvision/torchaudio unpinned, so pip pulled torchaudio
+# 2.11.0 (built against torch 2.11) -> its libtorchaudio.abi3.so has an undefined symbol
+# (torch_dtype_float4_e2m1fn_x2) and fails to load. transformers 5.x imports torchaudio while loading
+# the olmo3 model (RNNT loss path), which crashed the HF->distcp convert. torchaudio is unused for LLM
+# convert/training and transformers guards its absence, so remove the mismatched wheel.
+RUN pip uninstall -y torchaudio >/dev/null 2>&1 || true
+
 COPY bootstrap.sh /usr/local/bin/bootstrap.sh
 # train.py: single-command CLI front-end (argparse --flags -> run env -> exec bootstrap). Lets you
 # `docker run … python /usr/local/bin/train.py --ac-budget 0.1 --dataset … --seq-len …` without the
