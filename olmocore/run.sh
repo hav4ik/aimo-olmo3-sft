@@ -65,6 +65,9 @@ case "$MODEL_SIZE" in
     32b) HF_MODEL="${HF_MODEL:-allenai/Olmo-3.1-32B-Think}"; MODEL_ARCH="${MODEL_ARCH:-olmo3_32b}"; DEF_LR=5e-5; DEF_GBS=1572864; DEF_KEEP=1; DEF_SFT=Olmo-3-32B-SFT-local.py; DEF_SEQ_LEN=65536 ;;  # GBS 1.5M = 1572864 -> divides for WORLD_SIZE 2/3/4/6 (cp=4); lr 5e-5 sits between linear/sqrt scaling of AI2's 1e-4@4.19M
     *)   echo "ERROR: MODEL_SIZE='$MODEL_SIZE' (want 1b|7b|32b)"; exit 2 ;;
 esac
+# FP8-FREE 32B recipe: SFT_SCRIPT_NAME=Olmo-3-32B-SFT-bf16.py MODEL_SIZE=32b — a copy of the 32B
+# script with all FP8 code removed (the Olmo-3 authors flagged FP8 SFT as too reckless; it raises if
+# OLMO_FP8 is set). bootstrap.sh already downloads it with the repo.
 SFT_SCRIPT_NAME="${SFT_SCRIPT_NAME:-$DEF_SFT}"   # per-size SFT script basename; explicit env wins
 SEQ_LEN="${SEQ_LEN:-$DEF_SEQ_LEN}"   # per-size default (1b=4096 native, 7b/32b=65536); explicit env wins
 export OLMO_KEEP_LAST_CKPTS="${OLMO_KEEP_LAST_CKPTS:-$DEF_KEEP}"
