@@ -49,6 +49,7 @@ _MAP = [
     ("optim",              "OLMO_OPTIM",               "optimizer: fused_adamw (default, fp32 state), skip_step (spike-protected; pair with --optim-dtype bf16 for ~16GB/rank less), adamw8bit (bnb PagedAdamW8bit, ~24GB/rank less)"),
     ("optim_dtype",        "OLMO_OPTIM_DTYPE",         "Adam moment dtype for --optim skip_step: bf16 stores m/v in bf16 (~16GB/rank less, fp32 master kept). Ignored by fused_adamw/adamw8bit"),
     ("grad_reduce_dtype",  "OLMO_GRAD_REDUCE_DTYPE",   "FSDP gradient reduce-scatter dtype: bf16 halves the grad buffer + comm (~8GB/rank less, slight grad-sum rounding; fp32 master unaffected); default fp32"),
+    ("nodes_per_fsdp_group","OLMO_NODES_PER_FSDP_GROUP","how many NODES form one FSDP shard group (one copy of the sharded model). 1=shard within a node (default); raise it to shard the 32B floor across more nodes (~1/N the floor for N nodes) at the cost of inter-node all-gather"),
     ("sink",               "OLMO_USE_SINK",            "per-head attention sink 0|1"),
     ("sink_init",          "OLMO_SINK_INIT",           "initial sink logit (stock warm start only)"),
     ("hf_tokenizer",       "OLMO_HF_TOKENIZER",        "1=reuse model tokenizer, or an HF id"),

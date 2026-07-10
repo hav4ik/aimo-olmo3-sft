@@ -547,12 +547,26 @@ class SFTConfig(Config):
         if _reduce_dtype == DType.bfloat16:
             log.info("Gradient reduce-scatter in bf16 (OLMO_GRAD_REDUCE_DTYPE=bf16): ~8 GB/rank less, "
                      "slight grad-sum rounding; fp32 master weights unaffected")
+        # HSDP shard-group width. shard_degree is the dp_shard mesh dim; the CP dim joins it (the dp_cp
+        # flatten in build_world_mesh), so ONE copy of the sharded model lives across
+        # (shard_degree * cp_degree) GPUs. Default OLMO_NODES_PER_FSDP_GROUP=1 keeps sharding within a
+        # node (fast intra-node all-gather, replicate across nodes) — the AI2 default. Raise it when the
+        # 32B model+optimizer floor doesn't fit one node: the floor drops ~linearly with the group width
+        # (e.g. 4 nodes -> shard over 4x the GPUs -> ~1/4 the floor), at the cost of inter-node
+        # all-gather each layer. num_nodes must be divisible by the group size (olmo-core fails loudly
+        # otherwise).
+        _nodes_per_group = int(os.environ.get("OLMO_NODES_PER_FSDP_GROUP", "1"))
+        _shard_degree = max(1, (_nodes_per_group * GPUS_PER_NODE) // (bs_config.cp_degree or 1))
+        if _nodes_per_group != 1:
+            log.info(
+                f"FSDP shard group = {_nodes_per_group} node(s) -> shard_degree={_shard_degree} "
+                f"(model sharded across ~{_shard_degree * (bs_config.cp_degree or 1)} GPUs)"
+            )
         dp_config = TransformerDataParallelConfig(
             name=DataParallelType.hsdp,
             param_dtype=DType.bfloat16,
             reduce_dtype=_reduce_dtype,
-            shard_degree=GPUS_PER_NODE  # try to keep communication w/in a node
-            // (bs_config.cp_degree or 1),
+            shard_degree=_shard_degree,
         )
 
         # Opt-in model-build env knobs, ALL off by default so a no-env run is built EXACTLY as AI2
