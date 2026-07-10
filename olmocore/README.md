@@ -1,5 +1,54 @@
 # Olmo-3 32B SFT (olmo-core) — run knobs reference
 
+## TL;DR — best setting for 128K context (32B, multi-node H100)
+
+128K needs Ulysses CP (activations don't fit otherwise) **and** the model sharded across enough GPUs to
+fit the optimizer floor. **cp8 (16384 tokens/rank) is the MAX Ulysses CP for 40 heads at 128K** (cp must
+divide both 40 and 131072 → only 1/2/4/8), so you fit by sharding wider, not by more CP. **Minimal
+command** (only the knobs that differ from defaults):
+
+```bash
+docker run --rm --gpus all --ipc=host -e HF_TOKEN=$HF_TOKEN \
+  -e PYTORCH_ALLOC_CONF=expandable_segments:True \
+  -v /host/data:/data/training chankhavu/olmo3-olmocore:cu128-fa2-sink \
+  python /usr/local/bin/train.py \
+      --seq-len 131072 --max-tokens-per-rank 16384 --cp-style ulysses \
+      --ac-budget 0 --nodes-per-fsdp-group 2 --grad-reduce-dtype bf16
+```
+
+Per rank ≈ **24 GB floor + ~27 GB activations ≈ ~51 GB** → fits 80 GB H100 (needs ≥2 nodes; a single
+8-GPU node can't shard the floor past 8). `--nodes-per-fsdp-group 4` → ~12 GB floor / ~40 GB total for
+more headroom (more inter-node comm).
+
+**Every knob for this run, and whether it's already the default** — the command passes only the 6
+non-defaults; drop any of those to fall back, or add any of the `(default)` rows to change it:
+
+| Flag | Value | Default? | Note |
+|---|---|:--:|---|
+| `--seq-len 131072` | 131072 | **no** (65536) | the context window |
+| `--max-tokens-per-rank 16384` | 16384 | **no** (auto) | → cp8; max CP for 40 heads @ 128K |
+| `--cp-style ulysses` | ulysses | **no** (ring) | **required** for sinks (ring rejects them) |
+| `--ac-budget 0` | 0 | **no** (selected_modules) | recompute everything |
+| `--nodes-per-fsdp-group 2` | 2 | **no** (1) | shard 32B floor across 16 GPUs |
+| `--grad-reduce-dtype bf16` | bf16 | **no** (fp32) | ~8 GB/rank less |
+| `--optim skip_step` | skip_step | ✅ default | SkipStepAdamW spike protection |
+| `--optim-dtype bf16` | bf16 | ✅ default | bf16 moments, ~16 GB/rank less |
+| `--fused-lce 1` | 1 | ✅ default | no materialized logits, ~10 GB+ |
+| `--fused-rmsnorm` (omit) | auto | ✅ default | auto-off on H100 (big smem) |
+| `--attn-backend` (omit) | auto | ✅ default | flash_3 on H100 by arch |
+| `--sink 1` | 1 | ✅ default | per-head attention sink |
+| `--epochs 2` | 2 | ✅ default | `--max-steps` overrides |
+| `--gbs 1572864` | 1.5M | ✅ default | tokens/optimizer step |
+| `--keep-ckpts 3` | 3 | ✅ default | ~1 TB distcp on disk |
+| `--save-interval 1000` / `--ephemeral-interval 500` | 1000/500 | ✅ default | checkpoint cadence |
+| `--lr 5e-5` | 5e-5 | ✅ default | |
+| `--model-dtype` (omit) | float32 | ✅ default | bf16 master = risky, no SR |
+| `--code-ref olmocore-cu128-fa2-sink` | — | ✅ default | branch cloned at runtime |
+
+Full details for every knob below.
+
+---
+
 Every tunable for the olmo-core SFT recipe, in one place: optimizer, parallelism, sequence/batch
 sizing, memory, activation checkpointing, fused ops, attention sink, and checkpointing.
 
@@ -220,11 +269,13 @@ also feeds checkpoint-soup / TIES merging.
 
 **64× H100 (80 GB), 128K — shard wider, no offload needed:**
 ```bash
-OLMO_NODES_PER_FSDP_GROUP=4 OLMO_GRAD_REDUCE_DTYPE=bf16 \
-python /usr/local/bin/train.py --seq-len 131072 --max-tokens-per-rank 8192 \
-    --cp-style ulysses --ac-budget 0 --optim skip_step --optim-dtype bf16
+OLMO_NODES_PER_FSDP_GROUP=2 OLMO_GRAD_REDUCE_DTYPE=bf16 \
+python /usr/local/bin/train.py --seq-len 131072 --max-tokens-per-rank 16384 \
+    --cp-style ulysses --ac-budget 0
 ```
-(cp8 → 16384 tok/rank; shard-over-32 → ~12 GB floor → ~40 GB/rank total, comfortable.)
+(`--max-tokens-per-rank 16384` → cp8 = 16384 tok/rank, the max Ulysses CP for 40 heads at 128K;
+`8192` would be cp16, invalid since 16 ∤ 40. shard-over-16 → ~24 GB floor → ~51 GB/rank; skip_step+bf16
+optimizer is the default.)
 
 **65K without CP** (teammate's H200 shape, ported): shard over all GPUs, `--cp-style` cp=1
 (`--max-tokens-per-rank ≥ seq_len`), `OLMO_NODES_PER_FSDP_GROUP=<#nodes>`. Simpler — no Ulysses, no
