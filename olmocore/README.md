@@ -316,7 +316,9 @@ checkpoints only sit on WEKA/local disk.
 | `--model-size` | `MODEL_SIZE` | `32b` (picks `run.sh` defaults) |
 | `--sft-script` | `SFT_SCRIPT_NAME` | `Olmo-3-32B-SFT-bf16.py` (FP8-free) |
 | `--hf-tokenizer` | `OLMO_HF_TOKENIZER` | `1` (reuse model tokenizer) or an HF id |
-| `--lr` | `LR` | 5e-5 |
+| `--lr` | `LR` | 5e-5 — **peak** LR |
+| `--lr-alpha-f` | `OLMO_LR_ALPHA_F` | 0.1 — **floor** = alpha_f × peak (→ 5e-6); 0 = decay to 0 |
+| `--warmup-fraction` | `OLMO_LR_WARMUP` | 0.03 — LR warmup as a fraction of total steps |
 | `--code-ref` | `CODE_REF` | `olmocore-cu128-fa2-sink` (branch cloned at runtime) |
 | `--data` | `DATA` | `/data/training` |
 

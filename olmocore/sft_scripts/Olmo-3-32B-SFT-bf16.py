@@ -723,14 +723,15 @@ class SFTConfig(Config):
                 dp_config=dp_config,
                 cp_config=cp_config,
                 ac_config=ac_config,
+                # PEAK LR = optim.lr (run.sh's --train_module.optim.lr = LR/DEF_LR; 32B default 5e-5).
+                # FLOOR LR = alpha_f * peak. alpha_f default 0.1 (5e-5 -> 5e-6 final), NOT 0. Deliberate:
+                # (1) the data is rich enough that we expect to keep improving to the very end, so we don't
+                # kill the LR; (2) we may model-merge (TIES / checkpoint soup), and a non-collapsed late
+                # trajectory keeps the endpoint in a broad, mergeable basin. Cosine tail ~0.19*peak at 80%
+                # (vs linear's 0.28). Override the floor fraction / warmup via OLMO_LR_ALPHA_F / OLMO_LR_WARMUP.
                 scheduler=CosWithWarmup(
-                    warmup_fraction=0.03,
-                    alpha_f=0.1,  # floor the LR at 0.1*peak (5e-5 -> 5e-6 final), NOT 0. Deliberate, for
-                                  # two reasons: (1) the data is rich enough that we expect to keep
-                                  # improving to the very end, so we don't want to kill the LR; (2) we may
-                                  # model-merge (TIES / checkpoint soup), and a non-collapsed late
-                                  # trajectory keeps the endpoint in a broad, mergeable basin. Cosine (vs
-                                  # linear) still gives a gentler tail: ~0.19*peak at 80% vs linear's 0.28.
+                    warmup_fraction=float(os.environ.get("OLMO_LR_WARMUP", "0.03")),
+                    alpha_f=float(os.environ.get("OLMO_LR_ALPHA_F", "0.1")),
                 ),
                 max_grad_norm=1.0,
             ),
