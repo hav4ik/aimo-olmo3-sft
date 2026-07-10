@@ -33,6 +33,16 @@ On **Beaker** the image auto-maps the rendezvous — just set `replicas: N` + `l
 | `MASTER_ADDR` / `MASTER_PORT` | rendezvous host (node 0's address) / port (e.g. 29400) |
 | `OLMO_NODES_PER_FSDP_GROUP` | shard the model across N nodes (the memory lever — see table below) |
 
+**InfiniBand** (multi-node throughput — the image ships the user-space RDMA libs; you expose the devices
+and set the fabric env per cluster, else NCCL falls back to TCP sockets ~6× slower on the all-gather):
+- **Expose the IB devices:** Docker `--device /dev/infiniband` · Singularity `--bind
+  /dev/infiniband:/dev/infiniband` · Beaker `hostNetworking: true` (platform exposes it).
+- **Fabric env (HCA names are cluster-specific):**
+  - **NII** (8-rail): `NCCL_IB_HCA=mlx5_ibn1,mlx5_ibn2,mlx5_ibn3,mlx5_ibn4,mlx5_ibn5,mlx5_ibn6,mlx5_ibn7,mlx5_ibn8` `NCCL_IB_PCI_RELAXED_ORDERING=1` `NCCL_CROSS_NIC=1`
+  - **AI2 jupiter**: `NCCL_SOCKET_IFNAME=ib` `NCCL_IB_HCA=^=mlx5_bond_0`
+- **Verify it's active:** `NCCL_DEBUG=INFO` and look for `NET/IB` in the log (good) vs `NET/Socket` (fell
+  back to TCP — fabric env or device bind is wrong).
+
 **Every knob for this run, and whether it's already the default** — the command passes the non-default
 knobs (plus `--epochs`/`--gbs`, called out because they matter); drop any to fall back, or add any
 `(default)` row to change it:
@@ -319,5 +329,6 @@ hostname is unset and torchrun can't rendezvous — `bootstrap.sh` warns if so).
   /data/training, source: {weka: <bucket>}}]`) — that's where checkpoints land and persist. Don't use
   result-datasets for the ~251 GB distcp checkpoints; `result.path` is for small logs only.
 - **Secrets:** `beaker secret write HF_TOKEN …`, then `envVars: [{name: HF_TOKEN, secret: HF_TOKEN}]`.
-- **Cluster:** target H100 (sm_90) — the image supports it. Multi-node throughput needs InfiniBand
-  user-space drivers in the image (TODO; else NCCL falls back to Ethernet ~6× slower).
+- **Cluster:** target H100 (sm_90) — the image supports it. InfiniBand user-space libs are baked, so
+  multi-node uses IB once the fabric env + device access are set (see *InfiniBand* in the TL;DR; on
+  jupiter: `NCCL_SOCKET_IFNAME=ib`, `NCCL_IB_HCA=^=mlx5_bond_0`, `hostNetworking: true`).
