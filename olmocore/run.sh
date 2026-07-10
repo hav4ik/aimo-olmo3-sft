@@ -273,6 +273,17 @@ echo "[olmocore] $PRECISION | ${NNODES}x${NPROC} GPU cc=$GPU_CC | attn=$OLMO_ATT
 # (Olmo-2 1B local test path). Each size's MODEL_ARCH/HF_MODEL is set in the same table, so they stay in sync.
 SFT_SCRIPT="$HERE/sft_scripts/$SFT_SCRIPT_NAME"
 [ -f "$SFT_SCRIPT" ] || { echo "ERROR: no SFT script for MODEL_SIZE=$MODEL_SIZE at $SFT_SCRIPT"; exit 2; }
+
+# Optional runtime pre-flight (OLMO_ATTN_SELFCHECK=1, rank-0 only, ~1 min): run the attention-sink
+# kernel consistency checks on THIS box's GPU — eager vs FA2/FA3, in-kernel FA2 vs post-correction,
+# and FA2-post-correction vs FA3-in-kernel (the two production paths). ABORTS the run if they diverge.
+# Each check self-skips backends not present, so it validates whatever the image + GPU actually have.
+if [ "${OLMO_ATTN_SELFCHECK:-0}" = "1" ] && [ "$THIS_NODE_RANK" -eq 0 ]; then
+    echo "[olmocore] OLMO_ATTN_SELFCHECK=1: attention-sink kernel consistency check (FA2/FA3 vs eager, FA2 vs FA3)…"
+    python /workspace/OLMo-core/src/test/nn/attention/attention_sink_flash_test.py \
+        || { echo "[olmocore] ERROR: attention-sink self-check FAILED — aborting before training"; exit 7; }
+fi
+
 exec torchrun "${RDZV[@]}" --nproc_per_node="$NPROC" \
     "$SFT_SCRIPT" \
     train "$RUN_NAME" "$CKPT" "${CLUSTER:-local_h100}" \
