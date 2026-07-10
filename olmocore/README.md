@@ -8,14 +8,23 @@ divide both 40 and 131072 → only 1/2/4/8), so you fit by sharding wider, not b
 command** (only the knobs that differ from defaults):
 
 ```bash
-docker run --rm --gpus all --ipc=host -e HF_TOKEN=$HF_TOKEN \
-  -e PYTORCH_ALLOC_CONF=expandable_segments:True \
-  -v /host/data:/data/training chankhavu/olmo3-olmocore:cu128-fa2-sink \
+# Run on EACH node. Per node: set GLOBAL_RANK=0..WORLD_SIZE-1; MASTER_ADDR = node 0's host.
+# NCCL_IB_HCA names are CLUSTER-SPECIFIC — NII's mlx5_ibn1..8 shown; AI2 jupiter = "^=mlx5_bond_0".
+docker run --rm --gpus all --ipc=host --cap-add=IPC_LOCK \
+  -v /dev/infiniband:/dev/infiniband -v /host/data:/data/training \
+  -e HF_TOKEN=$HF_TOKEN -e PYTORCH_ALLOC_CONF=expandable_segments:True \
+  -e WORLD_SIZE=2 -e GLOBAL_RANK=0 -e MASTER_ADDR=<node0-host> -e MASTER_PORT=29400 \
+  -e NCCL_IB_HCA=mlx5_ibn1,mlx5_ibn2,mlx5_ibn3,mlx5_ibn4,mlx5_ibn5,mlx5_ibn6,mlx5_ibn7,mlx5_ibn8 \
+  -e NCCL_IB_PCI_RELAXED_ORDERING=1 -e NCCL_CROSS_NIC=1 \
+  chankhavu/olmo3-olmocore:cu128-fa2-sink \
   python /usr/local/bin/train.py \
       --seq-len 131072 --max-tokens-per-rank 16384 --cp-style ulysses \
       --ac-budget 0 --nodes-per-fsdp-group 2 --grad-reduce-dtype bf16 \
       --gbs 4194304 --epochs 2
 ```
+(2-node example; `WORLD_SIZE`=#nodes. On **Beaker** you don't set the rendezvous by hand — the shim maps
+`BEAKER_REPLICA_*` and you use `hostNetworking: true`; on **Singularity/NII** swap the mount for
+`--bind /dev/infiniband:/dev/infiniband`. Details + AI2 fabric env below.)
 
 Per rank ≈ **24 GB floor + ~27 GB activations ≈ ~51 GB** → fits 80 GB H100 (needs ≥2 nodes; a single
 8-GPU node can't shard the floor past 8). `--nodes-per-fsdp-group 4` → ~12 GB floor / ~40 GB total for
