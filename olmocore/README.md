@@ -13,15 +13,29 @@ docker run --rm --gpus all --ipc=host -e HF_TOKEN=$HF_TOKEN \
   -v /host/data:/data/training chankhavu/olmo3-olmocore:cu128-fa2-sink \
   python /usr/local/bin/train.py \
       --seq-len 131072 --max-tokens-per-rank 16384 --cp-style ulysses \
-      --ac-budget 0 --nodes-per-fsdp-group 2 --grad-reduce-dtype bf16
+      --ac-budget 0 --nodes-per-fsdp-group 2 --grad-reduce-dtype bf16 \
+      --gbs 4194304 --epochs 2
 ```
 
 Per rank ≈ **24 GB floor + ~27 GB activations ≈ ~51 GB** → fits 80 GB H100 (needs ≥2 nodes; a single
 8-GPU node can't shard the floor past 8). `--nodes-per-fsdp-group 4` → ~12 GB floor / ~40 GB total for
 more headroom (more inter-node comm).
 
-**Every knob for this run, and whether it's already the default** — the command passes only the 6
-non-defaults; drop any of those to fall back, or add any of the `(default)` rows to change it:
+### Multi-node env
+On **Beaker** the image auto-maps the rendezvous — just set `replicas: N` + `leaderSelection: true` +
+`hostNetworking: true` in the spec; `bootstrap.sh` maps `BEAKER_REPLICA_COUNT/RANK/LEADER_REPLICA_HOSTNAME`
+→ `WORLD_SIZE`/`GLOBAL_RANK`/`MASTER_ADDR`. On **raw torchrun/docker**, set these per node instead:
+
+| Env | Meaning |
+|---|---|
+| `WORLD_SIZE` | number of **nodes** (not ranks) |
+| `GLOBAL_RANK` | this node's 0-based index in `[0, WORLD_SIZE)` |
+| `MASTER_ADDR` / `MASTER_PORT` | rendezvous host (node 0's address) / port (e.g. 29400) |
+| `OLMO_NODES_PER_FSDP_GROUP` | shard the model across N nodes (the memory lever — see table below) |
+
+**Every knob for this run, and whether it's already the default** — the command passes the non-default
+knobs (plus `--epochs`/`--gbs`, called out because they matter); drop any to fall back, or add any
+`(default)` row to change it:
 
 | Flag | Value | Default? | Note |
 |---|---|:--:|---|
@@ -37,8 +51,8 @@ non-defaults; drop any of those to fall back, or add any of the `(default)` rows
 | `--fused-rmsnorm` (omit) | auto | ✅ default | auto-off on H100 (big smem) |
 | `--attn-backend` (omit) | auto | ✅ default | flash_3 on H100 by arch |
 | `--sink 1` | 1 | ✅ default | per-head attention sink |
-| `--epochs 2` | 2 | ✅ default | `--max-steps` overrides |
-| `--gbs 1572864` | 1.5M | ✅ default | tokens/optimizer step |
+| `--epochs 2` | 2 | ✅ default | shown because it matters; `--max-steps` overrides |
+| `--gbs 4194304` | 4.19M | **no** (1.57M) | tokens/optimizer step; matches AI2's reference batch |
 | `--keep-ckpts 3` | 3 | ✅ default | ~1 TB distcp on disk |
 | `--save-interval 1000` / `--ephemeral-interval 500` | 1000/500 | ✅ default | checkpoint cadence |
 | `--lr 5e-5` | 5e-5 | ✅ default | |
