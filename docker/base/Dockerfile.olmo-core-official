@@ -136,6 +136,9 @@ RUN if [ -n "${QUACK_VERSION}" ]; then \
 # training uses FA2, inference-on-Hopper can use the FA3 built above):
 #   OLMO_EXTRAS="dev,beaker,comet,dion,eval,fla,torchao,transformers,wandb"
 ARG OLMO_EXTRAS=all
+COPY pyproject.toml .
+COPY src/olmo_core/__init__.py src/olmo_core/__init__.py
+COPY src/olmo_core/version.py src/olmo_core/version.py
 RUN pip install --no-cache-dir ".[${OLMO_EXTRAS}]" && \
     pip uninstall -y ai2-olmo-core && \
     rm -rf *
