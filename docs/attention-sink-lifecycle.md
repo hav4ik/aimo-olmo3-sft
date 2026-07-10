@@ -137,13 +137,43 @@ styles work:
 
 So a sink model at **cp≥2 requires Ulysses** — ring will `raise`.
 
-**BUT Ulysses currently trips a device-side index assert** with cp≥2 + intra-doc masking + torch.compile:
-`index out of bounds: 0 <= idx < <max_tokens_per_rank>`. Ulysses passes the FULL-sequence `cu_doc_lens`
-while the position/bucketize path sees a `max_tokens_per_rank`-sharded tensor → OOB. See the
-`OLMO_CP_STYLE` note in `Olmo-3-32B-SFT-bf16.py`.
+### Ulysses + intra-doc RoPE — FIXED (olmo-core `c7cfa2a`)
 
-**Net:** long-context (cp≥2) sink training is blocked until the Ulysses OOB is fixed. Until then:
-- **cp=1**: `--seq-len <=max_tokens_per_rank>` (e.g. `--seq-len 16384 --max-tokens-per-rank 16384`) —
-  sink works, no CP. Fits the RTX 6000 (same per-rank memory as 65536/cp4).
-- **cp≥2 / 65536+**: fix the Ulysses `cu_doc_lens`-vs-shard OOB (TODO), or go multi-node.
-- Ring is **not** an option with sinks.
+Ulysses shards the sequence contiguously and passes the FULL `cu_doc_lens` through, but RoPE runs on the
+shard (before the all-to-all). Previously `rope.forward` re-derived per-document positions from a LOCAL
+`flat_idx` against the FULL `cu_doc_lens`, so any rank whose shard didn't begin at global position 0 got
+**wrong RoPE phases** — corrupting logits and tripping a device-side index assert under torch.compile
+(`index out of bounds: 0 <= idx < max_tokens_per_rank`). This blocked long-context (cp≥2) sink training.
+
+**Fix (Ulysses-only; ring path unchanged):** bake the per-document position reset into the RoPE buffers
+BEFORE the load balancer shards them (`Transformer._prepare_inputs`, gated on `UlyssesLoadBalancer`), and
+apply the pre-sharded buffers per-row in `Attention.forward` (pass `cu_doc_lens=None` to RoPE). Ring still
+re-shards `cu_doc_lens` per rank and resets inside `rope.forward` as before.
+
+Verified: isolated RoPE fp32 exact (Δ=0), full-model Ulysses + 5 doc layouts == non-CP (delta = bf16
+reduction noise, matching the no-docmask CP baseline), ring result identical before/after. Test:
+`src/test/nn/transformer/cp_intra_doc_test.py` (Ulysses, FA2 + FA3, run on 2+ GPUs). Ring is skipped
+(zig-zag gather; upstream already skips ring CP; ring rejects sinks anyway).
+
+So: **long-context sink training now works on Ulysses.** Ring is still not an option with sinks. cp=1 is
+also fine (no CP) for `seq_len <= max_tokens_per_rank`.
+
+## Long-context on the RTX 6000: memory + compile
+
+Two RTX-6000-specific walls after the CP fix (both tunable, neither a correctness issue):
+
+**1. Device OOM.** 32B + AdamW is ~64 GB/rank (FSDP-sharded), leaving little for 65536-token activations
+(80 GB H100 → ~16 GB; 96 GB RTX 6000 → ~32 GB). Knobs, in order of impact:
+- `--ac-budget` LOWER = recompute more = less memory (1=recompute nothing/most mem, 0=recompute all/least).
+  You want ~0.1 for long context, not 0.8. (AI2: 32B=0.3, long-ctx SFT=0.1.)
+- `--max-tokens-per-rank 8192` → cp8 (all 8 GPUs in CP): half the activation memory of cp4. (32B has 40
+  heads, 40%8=0 ✓.)
+- If cp8 + `--ac-budget 0` still OOMs, the 64 GB optimizer floor is the wall → 8-bit AdamW or multi-node.
+
+**2. Triton shared-memory OOM at compile** (`No valid triton configs / out of resource: shared memory`,
+Required 196680 > limit ~101376). RMSNorm over the 5120-wide hidden dim compiles to a *persistent*
+reduction that loads the full row into shared memory (~196 KB). **Hopper (~228 KB smem/block) fits it;
+the RTX 6000 (~99 KB) does not.** The sft script now auto-sets
+`torch._inductor.config.triton.persistent_reductions=False` off Hopper (looped reductions fit smem;
+end-to-end cost <1% since norms are ~1-2% of runtime). Force with `OLMO_PERSISTENT_REDUCTIONS=0/1`.
+Eager fallback (no compile): `-e TORCHDYNAMO_DISABLE=1` (drop `--ac-budget`; budget mode needs compile).

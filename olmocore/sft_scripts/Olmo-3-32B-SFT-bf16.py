@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, List, Optional, Tuple, cast
 from urllib.parse import urlparse
 
+import torch
 from rich import print
 
 from olmo_core.config import Config, DType
@@ -105,6 +106,19 @@ from olmo_core.train.train_module.transformer.config import (
 from olmo_core.utils import prepare_cli_environment, seed_all
 
 log = logging.getLogger(__name__)
+
+# torch.compile: RMSNorm over the 5120-wide hidden dim compiles to a *persistent* reduction that loads
+# the full row into shared memory (~196 KB in fp32). Hopper (sm_90+, ~228 KB smem/block) fits it; Ampere
+# and Blackwell-workstation GPUs (RTX 6000 ~99 KB) do NOT -> inductor raises "No valid triton configs /
+# out of resource: shared memory" at compile time. Off Hopper, use LOOPED reductions so compile stays on
+# (tiny end-to-end cost — norms are ~1-2% of runtime; a looped reduction is ~10-40% slower for that one
+# kernel). OLMO_PERSISTENT_REDUCTIONS=1/0 forces the choice explicitly.
+_pr = os.environ.get("OLMO_PERSISTENT_REDUCTIONS")
+if _pr is not None:
+    torch._inductor.config.triton.persistent_reductions = _pr == "1"
+elif torch.cuda.is_available() and torch.cuda.get_device_capability()[0] < 9:
+    torch._inductor.config.triton.persistent_reductions = False
+    log.info("non-Hopper GPU: inductor persistent_reductions=False (RMSNorm compile fits shared memory)")
 
 DEFAULT_SEQUENCE_LENGTH = 16_384
 DEFAULT_NUM_NODES = 1
