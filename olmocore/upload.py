@@ -27,12 +27,20 @@ import json
 import logging
 import os
 import re
+import shutil
+import signal
 import struct
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Optional
+
+# Default tokenizer for the to-HF converter. NOTE: convert_checkpoint_to_hf.py feeds -t straight into
+# AutoTokenizer.from_pretrained (no alias table like the from-HF path), so the bare alias "dolma2" is NOT
+# resolvable — use the real HF repo. Overridden by --tokenizer / OLMO_UPLOAD_TOKENIZER (run.sh passes the
+# model's own tokenizer id when OLMO_HF_TOKENIZER=<id>).
+DEFAULT_TOKENIZER = "allenai/dolma2-tokenizer"
 
 OLMO_CORE_ROOT = Path(os.environ.get("OLMO_CORE_ROOT", "/workspace/OLMo-core"))
 CONVERT_TO_HF = OLMO_CORE_ROOT / "src" / "examples" / "huggingface" / "convert_checkpoint_to_hf.py"
@@ -64,14 +72,24 @@ class AlreadyUploaded(Exception):
     """The highest complete checkpoint already carries upload_successful.txt — nothing new to ship."""
 
 
-def find_final_checkpoint(output: Path, skip_uploaded: bool = True) -> Path:
+def find_final_checkpoint(output: Path, skip_uploaded: bool = True, run_name: str = "") -> Path:
     """Return the highest-step COMPLETE distcp checkpoint under output. Complete = model_and_optim/.metadata
     (DCP writes it LAST, after every shard) + config.json both present, so a half-written save at a crash is
     skipped, not picked. The converter is handed the stepN ROOT (it appends model_and_optim itself).
 
     If skip_uploaded and the highest complete checkpoint already has UPLOAD_MARKER, raise AlreadyUploaded —
-    we deliberately do NOT fall back to an older one (that would re-ship a stale checkpoint)."""
+    we deliberately do NOT fall back to an older one (that would re-ship a stale checkpoint).
+
+    run_name scopes the search to THIS run's save_folder (…/olmo-sft/<run_name>/step*) — critical on a
+    shared volume where a PRIOR run's higher-numbered step* would otherwise be picked and shipped."""
     steps = sorted(output.rglob("step*"), key=_step_num)
+    if run_name:
+        sep = f"{os.sep}olmo-sft{os.sep}{run_name}{os.sep}"
+        scoped = [s for s in steps if sep in f"{s}{os.sep}"]
+        if scoped:
+            steps = scoped
+        else:  # run_name given but no matching path yet (first save not landed) — treat as "nothing yet"
+            steps = []
 
     def has_config(s: Path) -> bool:
         return (s / "config.json").exists()
@@ -158,6 +176,9 @@ def shard_safetensors(out_dir: Path, max_shard_bytes: int) -> None:
 
 def convert_checkpoint(checkpoint: Path, hf_out: Path, seq_len: int, tokenizer: str, shard_bytes: int) -> None:
     """distcp checkpoint -> HF safetensors at hf_out, sink-preserving, with legacy rope + sharding."""
+    # Clean any prior (possibly partial/re-sharded) export so orphan model-*-of-*.safetensors from a
+    # failed attempt can't get shipped alongside a fresh index.json.
+    shutil.rmtree(hf_out, ignore_errors=True)
     hf_out.mkdir(parents=True, exist_ok=True)
     log.info("converting %s -> %s", checkpoint, hf_out)
     proc = subprocess.run([sys.executable, str(CONVERT_TO_HF),
@@ -233,7 +254,7 @@ def ship_once(args: argparse.Namespace) -> int:
     ROOT (repo root == final model); otherwise ships intermediates under step<N>/."""
     output = Path(args.output).resolve()
     try:
-        checkpoint = find_final_checkpoint(output, skip_uploaded=not args.final)
+        checkpoint = find_final_checkpoint(output, skip_uploaded=not args.final, run_name=args.run_name)
     except AlreadyUploaded as already:
         log.info("latest checkpoint step%s already uploaded (%s present) — nothing new to ship",
                  already, UPLOAD_MARKER)
@@ -263,16 +284,47 @@ def watch(args: argparse.Namespace) -> int:
     single = [sys.executable, str(Path(__file__).resolve()),
               "--output", str(output), "--repo", args.repo, "--seq-len", str(args.seq_len),
               "--tokenizer", args.tokenizer, "--shard-size", args.shard_size, "--retries", str(args.retries)]
+    if args.run_name:
+        single += ["--run-name", args.run_name]
     if args.private:
         single.append("--private")
+
+    current: dict = {"proc": None}
+
+    def _kill_current() -> None:
+        p = current["proc"]
+        if p is not None and p.poll() is None:
+            try:
+                os.killpg(os.getpgid(p.pid), signal.SIGKILL)  # kill the single-shot AND its convert grandchild
+            except (ProcessLookupError, PermissionError):
+                pass
+
+    def _on_signal(signum, _frame):
+        # run.sh sends SIGTERM at end of training (or on Beaker preempt) — reap the in-flight convert so it
+        # can't orphan / collide with the FINAL upload, then exit.
+        log.info("upload watcher: signal %d — stopping and reaping in-flight upload", signum)
+        _kill_current()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
+
     while True:
         time.sleep(args.interval)  # sleep first — no checkpoint exists at step 0
+        # Spawn in its OWN session so a timeout (or SIGTERM) kills the single-shot AND its
+        # convert_checkpoint_to_hf grandchild — otherwise a wedged 32B CPU convert orphans and RAM stacks.
+        proc = subprocess.Popen(single, start_new_session=True)
+        current["proc"] = proc
         try:
-            subprocess.run(single, timeout=args.timeout)
+            proc.wait(timeout=args.timeout)
         except subprocess.TimeoutExpired:
-            log.warning("upload exceeded %ss and was killed (will retry next poll)", args.timeout)
+            log.warning("upload exceeded %ss — killing the process group (retry next poll)", args.timeout)
+            _kill_current()
+            proc.wait()
         except Exception as exc:  # noqa: BLE001 — watcher must survive any single-poll failure
             log.warning("upload watcher iteration failed (%s); retrying next interval", exc)
+        finally:
+            current["proc"] = None
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
@@ -280,6 +332,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("--output", required=True, help="Checkpoint root (rglob'd for step* distcp dirs).")
     p.add_argument("--repo", required=True, help="Target HF model repo id, e.g. user/olmo3-32b-sft-128k.")
+    p.add_argument("--run-name", "--run_name", dest="run_name", default=os.environ.get("RUN_NAME", ""),
+                   help="Scope discovery to …/olmo-sft/<run_name>/step* (avoids picking a prior run's ckpt on a shared volume).")
     p.add_argument("--watch", action="store_true", help="Background poll loop (converts+ships each new checkpoint).")
     p.add_argument("--final", action="store_true",
                    help="One-shot end-of-run ship: upload the latest checkpoint to the repo ROOT even if marked.")
@@ -289,8 +343,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                    help="Watch mode: per-checkpoint convert+ship wall-clock cap (s); wedged ship killed + retried.")
     p.add_argument("--seq-len", "--seq_len", dest="seq_len", type=int,
                    default=int(os.environ.get("SEQ_LEN", "65536")), help="max_position_embeddings in the HF config.")
-    p.add_argument("--tokenizer", default=os.environ.get("OLMO_UPLOAD_TOKENIZER", "dolma2"),
-                   help="Tokenizer id passed to the HF converter (-t).")
+    p.add_argument("--tokenizer", default=os.environ.get("OLMO_UPLOAD_TOKENIZER", DEFAULT_TOKENIZER),
+                   help="Tokenizer id passed to the to-HF converter (-t); must be a resolvable HF repo (NOT the 'dolma2' alias).")
     p.add_argument("--shard-size", "--shard_size", dest="shard_size", default="5GB",
                    help="Shard exported safetensors at this size (e.g. 5GB); '0'/'none' = single file.")
     p.add_argument("--private", action="store_true",

@@ -553,8 +553,8 @@ class SFTConfig(Config):
         # node (fast intra-node all-gather, replicate across nodes) — the AI2 default. Raise it when the
         # 32B model+optimizer floor doesn't fit one node: the floor drops ~linearly with the group width
         # (e.g. 4 nodes -> shard over 4x the GPUs -> ~1/4 the floor), at the cost of inter-node
-        # all-gather each layer. num_nodes must be divisible by the group size (olmo-core fails loudly
-        # otherwise).
+        # all-gather each layer. olmo-core validates `dp_world_size % shard_degree == 0` at build (raises
+        # OLMoConfigurationError) — keep #nodes and the group size powers-of-2 so shard_degree divides.
         _nodes_per_group = int(os.environ.get("OLMO_NODES_PER_FSDP_GROUP", "1"))
         _shard_degree = max(1, (_nodes_per_group * GPUS_PER_NODE) // (bs_config.cp_degree or 1))
         if _nodes_per_group != 1:
@@ -582,6 +582,12 @@ class SFTConfig(Config):
             model_overrides["dtype"] = (
                 DType.bfloat16 if os.environ["OLMO_MODEL_DTYPE"] == "bfloat16" else DType.float32
             )
+            if os.environ["OLMO_MODEL_DTYPE"] == "bfloat16":
+                # bf16 MODEL dtype => the FSDP master copy is bf16 (default is fp32 master + bf16 compute).
+                # olmo-core's AdamW/SkipStepAdamW has NO stochastic rounding, so sub-ULP updates at ~5e-5 LR
+                # are lost — validate loss parity vs fp32 master before trusting it. Saves ~8 GB/rank.
+                log.warning("OLMO_MODEL_DTYPE=bfloat16 -> bf16 MASTER weights (no stochastic rounding in "
+                            "olmo-core); sub-ULP LR updates can be lost. Validate loss vs fp32 master.")
         # OLMO_USE_SINK=1 adds a per-head learnable attention sink to every layer (ported from the
         # olmo3_sink fork's fa3_sink.py: an exact re-normalization of flash's (out, softmax_lse)).
         # Works on the flash_2 AND flash_3 backends; run.sh defaults to flash_3 on Hopper (H100/H200)

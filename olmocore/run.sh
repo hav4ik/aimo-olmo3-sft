@@ -62,7 +62,7 @@ MODEL_SIZE="${MODEL_SIZE:-7b}"
 case "$MODEL_SIZE" in
     1b)  HF_MODEL="${HF_MODEL:-allenai/OLMo-2-0425-1B-Instruct}"; MODEL_ARCH="${MODEL_ARCH:-olmo2_1b_v2}"; DEF_LR=5e-5; DEF_GBS=4096;    DEF_KEEP=1; DEF_SFT=Olmo-2-1B-SFT-local.py;  DEF_SEQ_LEN=4096 ;;
     7b)  HF_MODEL="${HF_MODEL:-allenai/Olmo-3-7B-Think}";    MODEL_ARCH="${MODEL_ARCH:-olmo3_7b}";  DEF_LR=5e-5; DEF_GBS=1572864; DEF_KEEP=2; DEF_SFT=Olmo-3-7B-SFT-local.py;  DEF_SEQ_LEN=65536 ;;  # GBS 1.5M == 32B (divides for WORLD_SIZE 2/3/4/6 at cp=4)
-    32b) HF_MODEL="${HF_MODEL:-allenai/Olmo-3.1-32B-Think}"; MODEL_ARCH="${MODEL_ARCH:-olmo3_32b}"; DEF_LR=5e-5; DEF_GBS=1572864; DEF_KEEP=3; DEF_SFT=Olmo-3-32B-SFT-local.py; DEF_SEQ_LEN=65536 ;;  # GBS 1.5M = 1572864 -> divides for WORLD_SIZE 2/3/4/6 (cp=4); lr 5e-5 sits between linear/sqrt scaling of AI2's 1e-4@4.19M
+    32b) HF_MODEL="${HF_MODEL:-chankhavu/yccchen-olmo3-deploy}"; MODEL_ARCH="${MODEL_ARCH:-olmo3_32b}"; DEF_LR=5e-5; DEF_GBS=1572864; DEF_KEEP=3; DEF_SFT=Olmo-3-32B-SFT-local.py; DEF_SEQ_LEN=65536 ;;  # sink deploy model (trained sinks); base = allenai/Olmo-3.1-32B-Think. GBS 1.5M -> divides WORLD_SIZE 2/3/4/6 (cp=4); lr 5e-5 between linear/sqrt of AI2's 1e-4@4.19M
     *)   echo "ERROR: MODEL_SIZE='$MODEL_SIZE' (want 1b|7b|32b)"; exit 2 ;;
 esac
 # FP8-FREE 32B recipe: SFT_SCRIPT_NAME=Olmo-3-32B-SFT-bf16.py MODEL_SIZE=32b — a copy of the 32B
@@ -308,7 +308,12 @@ fi
 # training, the watcher is killed and a FINAL uncapped upload lands the end-of-run model at the repo root.
 UPLOAD_PY="$(dirname "$SFT_SCRIPT")/../upload.py"
 UPLOAD_WATCHER_PID=""
-trap '[ -n "$UPLOAD_WATCHER_PID" ] && kill "$UPLOAD_WATCHER_PID" 2>/dev/null || true' EXIT
+# The to-HF converter needs a RESOLVABLE tokenizer repo (the bare "dolma2" alias is NOT one). This model
+# (chankhavu/yccchen-olmo3-deploy) ships a DEEPSEEK tokenizer, NOT dolma2 — so default to the MODEL's own
+# tokenizer: OLMO_TOKENIZER_HF (set when OLMO_HF_TOKENIZER=<id>/1), else HF_MODEL itself (carries the
+# deepseek tokenizer). Never fall back to dolma2 here (would export a wrong tokenizer).
+_UPLOAD_TOKENIZER="${OLMO_TOKENIZER_HF:-$HF_MODEL}"
+_reap_watcher() { [ -n "$UPLOAD_WATCHER_PID" ] && kill -TERM "$UPLOAD_WATCHER_PID" 2>/dev/null || true; }
 if [ -n "${OLMO_HF_UPLOAD_REPO:-}" ] && [ "$THIS_NODE_RANK" -eq 0 ]; then
     if [ -z "${HF_TOKEN:-}" ]; then
         echo "[olmocore] WARN: OLMO_HF_UPLOAD_REPO set but HF_TOKEN is empty — skipping upload watcher."
@@ -318,13 +323,20 @@ if [ -n "${OLMO_HF_UPLOAD_REPO:-}" ] && [ "$THIS_NODE_RANK" -eq 0 ]; then
         UPLOAD_LOG="${OLMO_SFT_SAVE_ROOT}/hf_upload_watcher.log"
         echo "[olmocore] HF upload watcher -> ${OLMO_HF_UPLOAD_REPO} (poll ${OLMO_HF_UPLOAD_INTERVAL:-300}s, log $UPLOAD_LOG)"
         CUDA_VISIBLE_DEVICES="" nohup python "$UPLOAD_PY" --watch \
-            --output "$OLMO_SFT_SAVE_ROOT" --repo "$OLMO_HF_UPLOAD_REPO" \
-            --seq-len "${SEQ_LEN:-65536}" --tokenizer "${OLMO_TOKENIZER_HF:-dolma2}" \
+            --output "$OLMO_SFT_SAVE_ROOT" --repo "$OLMO_HF_UPLOAD_REPO" --run-name "$RUN_NAME" \
+            --seq-len "${SEQ_LEN:-65536}" --tokenizer "$_UPLOAD_TOKENIZER" \
             > "$UPLOAD_LOG" 2>&1 &
         UPLOAD_WATCHER_PID=$!
     fi
 fi
 
+# Run torchrun in the BACKGROUND and FORWARD preemption signals to it. Old code `exec`'d torchrun as PID 1,
+# so a Beaker/docker SIGTERM hit it directly (graceful checkpoint). Now run.sh is PID 1, so we must trap
+# TERM/INT, forward to torchrun, and RE-WAIT until it finishes its shutdown save — else it's SIGKILLed
+# mid-save = lost progress. The watcher traps SIGTERM and reaps its own in-flight convert.
+TRAIN_RC=0
+trap '_reap_watcher; [ -n "${TORCHRUN_PID:-}" ] && kill -TERM "$TORCHRUN_PID" 2>/dev/null || true' TERM INT
+trap '_reap_watcher' EXIT
 torchrun "${RDZV[@]}" --nproc_per_node="$NPROC" \
     "$SFT_SCRIPT" \
     train "$RUN_NAME" "$CKPT" "${CLUSTER:-local_h100}" \
@@ -333,18 +345,23 @@ torchrun "${RDZV[@]}" --nproc_per_node="$NPROC" \
     --dataset_path="$DATASET" \
     --train_module.optim.lr="${LR:-$DEF_LR}" \
     --trainer.max_duration.value="$DUR_VAL" --trainer.max_duration.unit="$DUR_UNIT" \
-    ${EXTRA[@]+"${EXTRA[@]}"}
-TRAIN_RC=$?
+    ${EXTRA[@]+"${EXTRA[@]}"} &
+TORCHRUN_PID=$!
+while :; do
+    if wait "$TORCHRUN_PID"; then TRAIN_RC=0; else TRAIN_RC=$?; fi
+    kill -0 "$TORCHRUN_PID" 2>/dev/null || break   # a forwarded signal interrupts wait; re-wait until it exits
+done
+trap - TERM INT
 
-# Stop the watcher; then the FINAL uncapped upload (node 0, on success) lands the end-of-run model at the
-# repo ROOT (repo root == the deliverable model; intermediates stay under step<N>/).
-[ -n "$UPLOAD_WATCHER_PID" ] && kill "$UPLOAD_WATCHER_PID" 2>/dev/null || true
+# Stop the watcher (it reaps any in-flight convert), then the FINAL uncapped upload (node 0, on success)
+# lands the end-of-run model at the repo ROOT (repo root == the deliverable model; intermediates under step<N>/).
+_reap_watcher
 if [ -n "${OLMO_HF_UPLOAD_REPO:-}" ] && [ "$THIS_NODE_RANK" -eq 0 ] && [ -n "${HF_TOKEN:-}" ] \
         && [ -f "$UPLOAD_PY" ] && [ "$TRAIN_RC" -eq 0 ]; then
     echo "[olmocore] final HF upload -> ${OLMO_HF_UPLOAD_REPO} (repo root = end-of-run model)"
     CUDA_VISIBLE_DEVICES="" python "$UPLOAD_PY" --final \
-        --output "$OLMO_SFT_SAVE_ROOT" --repo "$OLMO_HF_UPLOAD_REPO" \
-        --seq-len "${SEQ_LEN:-65536}" --tokenizer "${OLMO_TOKENIZER_HF:-dolma2}" \
+        --output "$OLMO_SFT_SAVE_ROOT" --repo "$OLMO_HF_UPLOAD_REPO" --run-name "$RUN_NAME" \
+        --seq-len "${SEQ_LEN:-65536}" --tokenizer "$_UPLOAD_TOKENIZER" \
         || echo "[olmocore] WARN: final HF upload failed — the distcp checkpoint is still on disk/WEKA."
 fi
 exit "$TRAIN_RC"
