@@ -534,10 +534,23 @@ class SFTConfig(Config):
         else:
             raise OLMoConfigurationError(f"OLMO_CP_STYLE='{_cp_style}' (want ring|ulysses)")
 
+        # Gradient reduce-scatter precision. fp32 (default) is the safe baseline; bf16 halves the grad
+        # buffer + the reduce-scatter NCCL traffic (~8 GB/rank less at 32B, slightly faster comm) at the
+        # cost of a little rounding in the gradient SUM. Low-risk vs bf16 master: gradients are already
+        # noisy minibatch estimates and the fp32 master weights still accumulate the update.
+        # OLMO_GRAD_REDUCE_DTYPE=bf16 to enable.
+        _reduce_dtype = (
+            DType.bfloat16
+            if os.environ.get("OLMO_GRAD_REDUCE_DTYPE") in ("bf16", "bfloat16")
+            else DType.float32
+        )
+        if _reduce_dtype == DType.bfloat16:
+            log.info("Gradient reduce-scatter in bf16 (OLMO_GRAD_REDUCE_DTYPE=bf16): ~8 GB/rank less, "
+                     "slight grad-sum rounding; fp32 master weights unaffected")
         dp_config = TransformerDataParallelConfig(
             name=DataParallelType.hsdp,
             param_dtype=DType.bfloat16,
-            reduce_dtype=DType.float32,
+            reduce_dtype=_reduce_dtype,
             shard_degree=GPUS_PER_NODE  # try to keep communication w/in a node
             // (bs_config.cp_degree or 1),
         )

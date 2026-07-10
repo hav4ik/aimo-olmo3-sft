@@ -48,6 +48,7 @@ _MAP = [
     ("fused_rmsnorm",      "OLMO_FUSED_RMSNORM",       "wide RMSNorm impl: 1=FusedRMSNorm (flash triton kernel, required on RTX 6000/A100 — the compiled persistent reduction won't fit smem), 0=stock compiled rms; unset=auto-on when GPU smem<200KB"),
     ("optim",              "OLMO_OPTIM",               "optimizer: fused_adamw (default, fp32 state), skip_step (spike-protected; pair with --optim-dtype bf16 for ~16GB/rank less), adamw8bit (bnb PagedAdamW8bit, ~24GB/rank less)"),
     ("optim_dtype",        "OLMO_OPTIM_DTYPE",         "Adam moment dtype for --optim skip_step: bf16 stores m/v in bf16 (~16GB/rank less, fp32 master kept). Ignored by fused_adamw/adamw8bit"),
+    ("grad_reduce_dtype",  "OLMO_GRAD_REDUCE_DTYPE",   "FSDP gradient reduce-scatter dtype: bf16 halves the grad buffer + comm (~8GB/rank less, slight grad-sum rounding; fp32 master unaffected); default fp32"),
     ("sink",               "OLMO_USE_SINK",            "per-head attention sink 0|1"),
     ("sink_init",          "OLMO_SINK_INIT",           "initial sink logit (stock warm start only)"),
     ("hf_tokenizer",       "OLMO_HF_TOKENIZER",        "1=reuse model tokenizer, or an HF id"),
