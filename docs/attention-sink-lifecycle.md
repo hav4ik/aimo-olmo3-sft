@@ -124,11 +124,26 @@ training bug (the real `--seq-len 65536` run has completion tokens). Fixes:
 To isolate a *real* forward NaN from the masking artifact: rerun the smoke with `--sink 0`. If the NaN
 persists it's not the sinks (batch/data/precision); if it clears, investigate the loaded sinks.
 
-## Known pitfall: Ulysses CP device-side index assert — use ring
+## Context parallelism + sinks — the hard constraint
 
-`--cp-style ulysses` (`OLMO_CP_STYLE=ulysses`) trips a device-side assert with cp≥2 + intra-doc masking
-+ torch.compile: `index out of bounds: 0 <= idx < <max_tokens_per_rank>`. Ulysses passes the
-FULL-sequence `cu_doc_lens` while the tensor is seq-sharded to `max_tokens_per_rank`/rank, so the
-attention position/bucketize kernel indexes global doc positions into a per-rank buffer → OOB. See the
-`OLMO_CP_STYLE` note in `Olmo-3-32B-SFT-bf16.py`. **Use the default `ring` CP** (doc-mask-aware,
-FA2-friendly, the proven path) — just omit `--cp-style`. Ulysses stays opt-in until that's debugged.
+The sink post-correction needs the **complete** softmax `lse` for each query. That drives which CP
+styles work:
+
+| CP style | Sink? | Why |
+|---|---|---|
+| **cp=1 (no CP)** | ✅ | flash computes the complete local lse |
+| **Ulysses** (all-to-all) | ✅ | each rank gets the FULL sequence for its head-slice → complete lse |
+| **Ring** | ❌ **rejected** (`_reject_ring_sink`) | ring builds the lse incrementally across ranks; the per-head sink correction can't be applied |
+
+So a sink model at **cp≥2 requires Ulysses** — ring will `raise`.
+
+**BUT Ulysses currently trips a device-side index assert** with cp≥2 + intra-doc masking + torch.compile:
+`index out of bounds: 0 <= idx < <max_tokens_per_rank>`. Ulysses passes the FULL-sequence `cu_doc_lens`
+while the position/bucketize path sees a `max_tokens_per_rank`-sharded tensor → OOB. See the
+`OLMO_CP_STYLE` note in `Olmo-3-32B-SFT-bf16.py`.
+
+**Net:** long-context (cp≥2) sink training is blocked until the Ulysses OOB is fixed. Until then:
+- **cp=1**: `--seq-len <=max_tokens_per_rank>` (e.g. `--seq-len 16384 --max-tokens-per-rank 16384`) —
+  sink works, no CP. Fits the RTX 6000 (same per-rank memory as 65536/cp4).
+- **cp≥2 / 65536+**: fix the Ulysses `cu_doc_lens`-vs-shard OOB (TODO), or go multi-node.
+- Ring is **not** an option with sinks.
