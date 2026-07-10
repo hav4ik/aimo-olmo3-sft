@@ -23,7 +23,7 @@ tasks:
   - --seq-len=131072
   - --max-tokens-per-rank=16384               # cp8 = 16384 tok/rank (max Ulysses CP for 40 heads @ 128K)
   - --cp-style=ulysses
-  - --ac-budget=0.3
+  - --ac-budget=0                            # recompute all = least activation memory (raise to 0.3 if you have headroom)
   - --nodes-per-fsdp-group=4                  # shard the 32B floor across 4 nodes (32 GPUs)
   - --grad-reduce-dtype=bf16
   - --gbs=4194304
@@ -55,9 +55,11 @@ tasks:
 
 - **Rendezvous is automatic** — `bootstrap.sh` maps `BEAKER_REPLICA_COUNT/RANK/LEADER_REPLICA_HOSTNAME` →
   `WORLD_SIZE`/`GLOBAL_RANK`/`MASTER_ADDR` (needs `leaderSelection: true`). Nothing to set by hand.
-- **Memory** — shard across 4 nodes (32 GPUs) → ~12 GB optimizer floor; `--ac-budget 0.3` keeps more
-  activations (faster than 0), comfortable on 80 GB. Use `--nodes-per-fsdp-group 2` (~24 GB floor) for
-  fewer cross-node all-gathers, or push toward 8 for the lowest floor.
+- **Memory** — shard across 4 nodes (32 GPUs) → ~12 GB optimizer floor; `--ac-budget 0` recomputes all
+  (least activation memory). At 128K the step is comm-bound so ac 0's throughput cost is modest. The two
+  memory knobs trade off: `--ac-budget 0` frees enough activations to *narrow* `--nodes-per-fsdp-group`
+  (e.g. → 2, ~24 GB floor) which cuts inter-node comm — so ac 0 + a narrower group can be **both smaller
+  and faster** than ac 0.3 + a wider group. Raise ac toward 0.3 only if you have headroom to spare.
 - **InfiniBand** — `hostNetworking: true` exposes the fabric; the two `NCCL_*` vars point at jupiter's HCA
   (`mlx5_bond_0`). The image already ships the user-space RDMA libs. Verify with `NCCL_DEBUG=INFO` →
   expect `NET/IB` (not `NET/Socket`).
@@ -76,7 +78,7 @@ knobs (plus `--epochs`/`--gbs`, called out because they matter); drop any to fal
 | `--seq-len 131072` | 131072 | **no** (65536) | the context window |
 | `--max-tokens-per-rank 16384` | 16384 | **no** (auto) | → cp8; max CP for 40 heads @ 128K |
 | `--cp-style ulysses` | ulysses | **no** (ring) | **required** for sinks (ring rejects them) |
-| `--ac-budget 0.3` | 0.3 | **no** (selected_modules) | AI2's 32B budget; keeps more activations than 0 (faster) |
+| `--ac-budget 0` | 0 | **no** (selected_modules) | recompute all = least activation memory; comm-bound at 128K so modest speed cost (0.3 = a bit faster if you have headroom) |
 | `--nodes-per-fsdp-group 4` | 4 | **no** (1) | shard 32B floor across 4 nodes / 32 GPUs |
 | `--grad-reduce-dtype bf16` | bf16 | **no** (fp32) | ~8 GB/rank less |
 | `--optim skip_step` | skip_step | ✅ default | SkipStepAdamW spike protection |
