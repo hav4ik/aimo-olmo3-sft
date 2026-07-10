@@ -41,6 +41,15 @@ RUN pip install --no-cache-dir "ring-flash-attn>=0.1.7" \
  && echo "from transformers.utils import is_flash_attn_greater_or_equal_2_10  # shim: ring_flash_attn hf_adapter on transformers 5.x" >> "$F" \
  && python -c "import ring_flash_attn; print('ring-flash-attn OK')"
 
+# bitsandbytes: 8-bit paged AdamW optimizer (OLMO_OPTIM=adamw8bit / --optim adamw8bit) — stores Adam
+# moments in 8-bit, ~24 GB/rank less than fp32 AdamW, for fitting 32B long-context on smaller cards.
+# Optional at runtime (default optimizer is fused AdamW). NOTE: bnb's CUDA kernel arch coverage for very
+# new GPUs (e.g. RTX 6000 Blackwell sm_120) depends on the build — verify on the target GPU. Import check
+# is non-fatal here (no GPU at build time).
+RUN pip install --no-cache-dir bitsandbytes \
+ && (python -c "import bitsandbytes as b; print('bitsandbytes', b.__version__)" \
+     || echo "[bnb] build-time import check skipped (no GPU); verify at runtime")
+
 # Hard CUDA ceiling for the cu128 build: fail the build if ANY installed package pulls CUDA > 12.8
 # (a 12.9 or 13.0 transitive dep). Gated by build-arg so the cu130 production build is unaffected
 # (default empty = skip). The cu128 chain passes VERIFY_CUDA_MAX=12.8 (see build_cu128_fa2_sink.sh).

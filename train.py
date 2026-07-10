@@ -45,6 +45,8 @@ _MAP = [
     ("lr",                 "LR",                       "learning rate"),
     ("ac_budget",          "OLMO_AC_BUDGET",           "activation-checkpointing: <0..1> budget (higher=faster/more mem), 'none', or unset=selected_modules"),
     ("persistent_reductions", "OLMO_PERSISTENT_REDUCTIONS", "torch.compile RMSNorm reduction: 1=persistent (fast, needs ~200KB smem: Hopper/B200), 0=looped (fits small smem: RTX 6000/A100); unset=auto-detect from GPU smem"),
+    ("optim",              "OLMO_OPTIM",               "optimizer: fused_adamw (default, fp32 state), skip_step (spike-protected; pair with --optim-dtype bf16 for ~16GB/rank less), adamw8bit (bnb PagedAdamW8bit, ~24GB/rank less)"),
+    ("optim_dtype",        "OLMO_OPTIM_DTYPE",         "Adam moment dtype for --optim skip_step: bf16 stores m/v in bf16 (~16GB/rank less, fp32 master kept). Ignored by fused_adamw/adamw8bit"),
     ("sink",               "OLMO_USE_SINK",            "per-head attention sink 0|1"),
     ("sink_init",          "OLMO_SINK_INIT",           "initial sink logit (stock warm start only)"),
     ("hf_tokenizer",       "OLMO_HF_TOKENIZER",        "1=reuse model tokenizer, or an HF id"),

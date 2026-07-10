@@ -77,7 +77,7 @@ from olmo_core.io import clear_directory, copy_dir, dir_is_empty, get_parent, jo
 from olmo_core.nn.attention import AttentionBackendName  # DIFF #4 (env attn backend)
 from olmo_core.nn.rope import YaRNRoPEScalingConfig
 from olmo_core.nn.transformer import TransformerConfig
-from olmo_core.optim import AdamWConfig, CosWithWarmup, SkipStepAdamWConfig
+from olmo_core.optim import AdamWConfig, CosWithWarmup, OptimConfig, SkipStepAdamWConfig
 from olmo_core.train import (
     Duration,
     LoadStrategy,
@@ -127,6 +127,27 @@ elif torch.cuda.is_available():
             f"GPU smem/block={_smem // 1024} KB (< 200 KB): inductor persistent_reductions=False "
             "so the RMSNorm compile fits shared memory"
         )
+
+@OptimConfig.register("paged_adamw8bit")
+@dataclass
+class PagedAdamW8bitConfig(OptimConfig):
+    """bitsandbytes 8-bit paged AdamW (the optimizer Yi-Chia's multi-GPU runs use). Stores the Adam
+    moments in 8-bit (~24 GB/rank less than fp32 AdamW; fp32 master weights kept by FSDP) and pages
+    optimizer state to CPU on memory spikes. Import is lazy so the script only needs bitsandbytes when
+    OLMO_OPTIM=adamw8bit. Uses the base OptimConfig.build(): it passes {lr, betas, eps, weight_decay}
+    to the optimizer and wires the LR scheduler's initial_lr like every other config."""
+
+    lr: float = 8e-5
+    betas: Tuple[float, float] = (0.9, 0.95)
+    eps: float = 1e-8
+    weight_decay: float = 0.0
+
+    @classmethod
+    def optimizer(cls):  # noqa: D401
+        import bitsandbytes as bnb  # lazy: only needed for OLMO_OPTIM=adamw8bit
+
+        return bnb.optim.PagedAdamW8bit
+
 
 DEFAULT_SEQUENCE_LENGTH = 16_384
 DEFAULT_NUM_NODES = 1
@@ -520,15 +541,24 @@ class SFTConfig(Config):
         # optimizer exposes a state dtype. The bf16 2nd moment loses precision in the Adam denominator
         # — VALIDATE loss parity vs fp32. Default off.
         _opt_dt = DType.bfloat16 if os.environ.get("OLMO_OPTIM_DTYPE") in ("bf16", "bfloat16") else None
-        if os.environ.get("OLMO_OPTIM", "fused_adamw") == "fused_adamw":
+        _optim = os.environ.get("OLMO_OPTIM", "fused_adamw")
+        if _optim == "fused_adamw":
             if _opt_dt is not None:
                 log.warning("OLMO_OPTIM_DTYPE applies only to the skip_step optimizer; fused AdamW keeps fp32 state")
-            optim_config = AdamWConfig(
-                lr=8e-05, weight_decay=0.0, betas=(0.9, 0.95), fused=True
-            )
-        else:
+            optim_config = AdamWConfig(lr=8e-05, weight_decay=0.0, betas=(0.9, 0.95), fused=True)
+        elif _optim == "adamw8bit":
+            # bitsandbytes 8-bit paged AdamW (Yi-Chia's optimizer): ~24 GB/rank less than fp32 AdamW.
+            if _opt_dt is not None:
+                log.warning("OLMO_OPTIM_DTYPE is ignored for adamw8bit (moments are already 8-bit)")
+            optim_config = PagedAdamW8bitConfig(lr=8e-05, weight_decay=0.0, betas=(0.9, 0.95))
+            log.info("optimizer = bitsandbytes PagedAdamW8bit (8-bit moments; ~24 GB/rank less than fp32 AdamW)")
+        elif _optim == "skip_step":
             optim_config = SkipStepAdamWConfig(
                 lr=8e-05, weight_decay=0.0, betas=(0.9, 0.95), compile=False, dtype=_opt_dt
+            )
+        else:
+            raise OLMoConfigurationError(
+                f"unknown OLMO_OPTIM={_optim!r}; use one of: fused_adamw, skip_step, adamw8bit"
             )
 
         # Checkpoint cadence + retention (env-tunable). Persistent every OLMO_SAVE_INTERVAL steps,
