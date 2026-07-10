@@ -7,13 +7,16 @@ precision arms each (**BF16** / **FP8**). The heavy deps live in prebuilt Docker
 `/data/training`.
 
 ```
-olmocore/   sft_scripts/ (AI2's trainer, beaker-stubbed) · run.sh
+olmocore/   README.md (run-knobs reference) · sft_scripts/ (AI2's trainer, beaker-stubbed) · run.sh
 axolotl/    configs/ (olmo3-7b-bf16|fp8.yaml) · run.sh
 data_prep/  prepare.sh (offline prep, BOTH frameworks) · normalize.py · convert_hf_to_olmocore.sh · arrow_to_pretokenized_parquet.py
 docker/     Dockerfile.olmocore · Dockerfile.axolotl · build_and_push.sh
 bootstrap.sh  entrypoint.sh   HANDOUTS.md  RECIPES.md  BATCHING.md  STABILITY.md  DATA.md  SCALEUP_32B.md  AXOLOTL_PRETOKENIZED.md
 ```
 **New here? Read `HANDOUTS.md`** — the full deploy + data-prep guide for picking this up.
+**Tuning a run?** [`olmocore/README.md`](olmocore/README.md) — every knob in one place: optimizer,
+parallelism (CP vs FSDP shard width), sequence/batch sizing (global / per-device / per-DP-group), the
+memory ladder + floor budget, activation checkpointing, fused ops, checkpointing, and running on Beaker.
 
 ## How it fits together
 - **DockerHub images** (`chankhavu/olmo3-olmocore:cu130`, `chankhavu/olmo3-axolotl:cu130`) bake only
