@@ -28,6 +28,12 @@ tasks:
   - --grad-reduce-dtype=bf16
   - --gbs=4194304
   - --epochs=2
+  # --- identity: all DEFAULTS below (shown so you know where to change them) ---
+  - --model=chankhavu/yccchen-olmo3-deploy               # BASE model to SFT from (Olmo-3 + per-head sinks + Deepseek tokenizer)
+  - --dataset=chankhavu/yccchen-stage2-olmocore-256k-v2  # tokenized SFT dataset (HF repo)
+  # checkpoint upload sub-path: DEFAULT is ycchen-olmo32b-ds-sft-<timestamp> (run-unique, so re-runs don't
+  # overwrite). Leave it out to get the timestamp; uncomment to PIN a fixed name (used verbatim, no timestamp):
+  # - --hf-upload-prefix=my-run-name
   replicas: 8                                 # 8 nodes; × gpuCount 8 = 64 GPUs
   leaderSelection: true                       # REQUIRED — the rendezvous shim needs the leader hostname
   hostNetworking: true                        # REQUIRED for InfiniBand (RDMA); WEKA mounts don't need it
@@ -92,6 +98,10 @@ knobs (plus `--epochs`/`--gbs`, called out because they matter); drop any to fal
 | `--save-interval 1000` / `--ephemeral-interval 500` | 1000/500 | ✅ default | checkpoint cadence |
 | `--lr 5e-5` | 5e-5 | ✅ default | |
 | `--model-dtype` (omit) | float32 | ✅ default | bf16 master = risky, no SR |
+| `--model chankhavu/yccchen-olmo3-deploy` | deploy | ✅ default | **base model to SFT from** (sink + Deepseek); change to fine-tune a different base |
+| `--dataset chankhavu/yccchen-stage2-olmocore-256k-v2` | yccchen-256k | ✅ default | **tokenized SFT dataset** (HF repo); `--dataset-subdir` if shards are in a subfolder |
+| `--hf-upload-repo <user>/…` | — | **no** (unset) | destination repo for the checkpoint watchdog; **required to upload** (HF_TOKEN WRITE scope) |
+| `--hf-upload-prefix` (omit) | `ycchen-olmo32b-ds-sft-<ts>` | ✅ default | **checkpoint upload sub-path** in the repo; default is run-unique (timestamped); pin a fixed name to override |
 | `--code-ref olmocore-cu128-fa2-sink` | — | ✅ default | branch cloned at runtime |
 
 Full details for every knob below.
