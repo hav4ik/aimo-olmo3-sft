@@ -302,10 +302,12 @@ Set a repo id and a **node-0 background watchdog** (`olmocore/upload.py`, ported
 pipeline) polls the checkpoint dir every `OLMO_HF_UPLOAD_INTERVAL` s (default 300); for each **new
 complete** distcp checkpoint it converts distcp→HF (**sink-preserving** — via the sink-aware
 `save_hf_model`), shards the safetensors, and uploads to `<repo>/step<N>/`, writing an
-`upload_successful.txt` marker so each ships once. At end of run a **final uncapped upload** lands the
-end-of-run model at the **repo root** (so `AutoModel.from_pretrained("<repo>")` gives the final model;
-intermediates live under `step<N>/`). This is how you pull the model **out of the cluster** — otherwise
-checkpoints only sit on WEKA/local disk.
+`upload_successful.txt` marker so each ships once. **Three upload triggers** (matching the NII run): (1)
+each **new checkpoint** mid-run (the watcher), (2) a **crash** — the final upload runs on a non-zero exit
+and ships the **latest survivable** complete checkpoint, and (3) **normal end** — the final upload lands
+the end-of-run model. The final upload goes to the **repo root** (so `AutoModel.from_pretrained("<repo>")`
+gives it; intermediates live under `step<N>/`). This is how you pull the model **out of the cluster** —
+otherwise checkpoints only sit on WEKA/local disk.
 
 - Needs **`HF_TOKEN` with WRITE scope**. Repo is **private** by default (`OLMO_HF_UPLOAD_PRIVATE=0` for public).
 - **`--hf-upload-prefix` / `OLMO_HF_UPLOAD_PREFIX`**: a path prefix inside the repo — checkpoints land at

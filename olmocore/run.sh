@@ -364,15 +364,20 @@ while :; do
 done
 trap - TERM INT
 
-# Stop the watcher (it reaps any in-flight convert), then the FINAL uncapped upload (node 0, on success)
-# lands the end-of-run model at the repo ROOT (repo root == the deliverable model; intermediates under step<N>/).
+# Stop the watcher (it reaps any in-flight convert), then the FINAL uncapped upload (node 0). Runs on BOTH
+# a normal end AND a crash — on a non-zero rc it ships the LATEST SURVIVABLE complete checkpoint
+# (find_final_checkpoint skips half-written ones), matching the NII run. So the three upload triggers are:
+# (1) each new checkpoint mid-run (the watcher), (2) crash, (3) normal end. Repo root (or <prefix>) = model.
 _reap_watcher
-if [ -n "${OLMO_HF_UPLOAD_REPO:-}" ] && [ "$THIS_NODE_RANK" -eq 0 ] && [ -n "${HF_TOKEN:-}" ] \
-        && [ -f "$UPLOAD_PY" ] && [ "$TRAIN_RC" -eq 0 ]; then
-    echo "[olmocore] final HF upload -> ${OLMO_HF_UPLOAD_REPO} (repo root = end-of-run model)"
+if [ -n "${OLMO_HF_UPLOAD_REPO:-}" ] && [ "$THIS_NODE_RANK" -eq 0 ] && [ -n "${HF_TOKEN:-}" ] && [ -f "$UPLOAD_PY" ]; then
+    if [ "$TRAIN_RC" -eq 0 ]; then
+        echo "[olmocore] final HF upload -> ${OLMO_HF_UPLOAD_REPO} (end-of-run model)"
+    else
+        echo "[olmocore] training exited rc=$TRAIN_RC — shipping the LATEST SURVIVABLE checkpoint -> ${OLMO_HF_UPLOAD_REPO}"
+    fi
     CUDA_VISIBLE_DEVICES="" python "$UPLOAD_PY" --final \
         --output "$OLMO_SFT_SAVE_ROOT" --repo "$OLMO_HF_UPLOAD_REPO" --run-name "$RUN_NAME" \
-            --prefix "${OLMO_HF_UPLOAD_PREFIX:-}" \
+        --prefix "${OLMO_HF_UPLOAD_PREFIX:-}" \
         --seq-len "${SEQ_LEN:-65536}" --tokenizer "$_UPLOAD_TOKENIZER" \
         || echo "[olmocore] WARN: final HF upload failed — the distcp checkpoint is still on disk/WEKA."
 fi
