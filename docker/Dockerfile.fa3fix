@@ -1,0 +1,14 @@
+# Experimental FA3-sink fix — a THIN layer on top of the DEPLOYED cu128-fa2-sink image.
+# Does NOT touch the deployed tag and does NOT rebuild the base (no FA2/FA3 recompile): it only applies
+# a Python patch to the baked olmo_core `_SinkMerge` so the stock-FA3 sink post-correction stops crashing
+# in backward (version-counter guard). FA2 is unaffected (identical math). Builds in seconds.
+#
+#   docker build -f docker/Dockerfile.fa3fix -t chankhavu/olmo3-olmocore:cu128-fa3-sink-rc1 .
+#
+# Validate on H100 before promoting to a stable tag:
+#   pytest src/test/nn/attention/attention_sink_flash_test.py::test_fa3_sink_varlen -v
+ARG BASE=chankhavu/olmo3-olmocore:cu128-fa2-sink
+FROM ${BASE}
+
+COPY docker/fa3_sink_fix.py /tmp/fa3_sink_fix.py
+RUN python /tmp/fa3_sink_fix.py && rm /tmp/fa3_sink_fix.py
