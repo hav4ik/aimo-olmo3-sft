@@ -334,6 +334,7 @@ if [ -n "${OLMO_HF_UPLOAD_REPO:-}" ] && [ "$THIS_NODE_RANK" -eq 0 ]; then
         echo "[olmocore] HF upload watcher -> ${OLMO_HF_UPLOAD_REPO} (poll ${OLMO_HF_UPLOAD_INTERVAL:-300}s, log $UPLOAD_LOG)"
         CUDA_VISIBLE_DEVICES="" nohup python "$UPLOAD_PY" --watch \
             --output "$OLMO_SFT_SAVE_ROOT" --repo "$OLMO_HF_UPLOAD_REPO" --run-name "$RUN_NAME" \
+            --prefix "${OLMO_HF_UPLOAD_PREFIX:-}" \
             --seq-len "${SEQ_LEN:-65536}" --tokenizer "$_UPLOAD_TOKENIZER" \
             > "$UPLOAD_LOG" 2>&1 &
         UPLOAD_WATCHER_PID=$!
@@ -371,6 +372,7 @@ if [ -n "${OLMO_HF_UPLOAD_REPO:-}" ] && [ "$THIS_NODE_RANK" -eq 0 ] && [ -n "${H
     echo "[olmocore] final HF upload -> ${OLMO_HF_UPLOAD_REPO} (repo root = end-of-run model)"
     CUDA_VISIBLE_DEVICES="" python "$UPLOAD_PY" --final \
         --output "$OLMO_SFT_SAVE_ROOT" --repo "$OLMO_HF_UPLOAD_REPO" --run-name "$RUN_NAME" \
+            --prefix "${OLMO_HF_UPLOAD_PREFIX:-}" \
         --seq-len "${SEQ_LEN:-65536}" --tokenizer "$_UPLOAD_TOKENIZER" \
         || echo "[olmocore] WARN: final HF upload failed — the distcp checkpoint is still on disk/WEKA."
 fi

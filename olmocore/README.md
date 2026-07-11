@@ -308,9 +308,15 @@ intermediates live under `step<N>/`). This is how you pull the model **out of th
 checkpoints only sit on WEKA/local disk.
 
 - Needs **`HF_TOKEN` with WRITE scope**. Repo is **private** by default (`OLMO_HF_UPLOAD_PRIVATE=0` for public).
+- **`--hf-upload-prefix` / `OLMO_HF_UPLOAD_PREFIX`**: a path prefix inside the repo — checkpoints land at
+  `<repo>/<prefix>/step<N>` and the final at `<repo>/<prefix>` (empty = repo root). Use it to keep several
+  runs in one repo, e.g. `--hf-upload-prefix 128k-run1`.
+- The exported tokenizer follows the trained model — the deploy model's **deepseek** tokenizer (never dolma2).
 - CPU-only (`CUDA_VISIBLE_DEVICES=""`) so it never steals a training GPU; convert+ship bounded by
-  `OLMO_HF_UPLOAD_TIMEOUT` (default 5400 s) so a wedged upload can't stall the loop.
-- Runtime-cloned (`run.sh` + `upload.py`) — **works with the current image, no rebuild.**
+  `OLMO_HF_UPLOAD_TIMEOUT` (default 5400 s) so a wedged upload can't stall the loop; scoped to the current
+  `RUN_NAME` so a prior run's checkpoint on a shared volume isn't shipped by mistake.
+- Runtime-cloned (`run.sh` + `upload.py`) — **works with the current image, no rebuild** (the
+  `--hf-upload-prefix` *flag* form bakes on the next build; the `OLMO_HF_UPLOAD_PREFIX` env works today).
 
 ---
 

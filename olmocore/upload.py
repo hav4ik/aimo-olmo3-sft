@@ -264,7 +264,10 @@ def ship_once(args: argparse.Namespace) -> int:
         return 3 if args.final else 0
 
     step = _step_num(checkpoint)
-    path_in_repo = "" if args.final else f"step{step}"
+    tail = "" if args.final else f"step{step}"
+    # Optional path prefix inside the repo: uploads land at <repo>/<prefix>/step<N> (intermediate) and
+    # <repo>/<prefix> (final). No prefix -> <repo>/step<N> and <repo> root (loadable directly).
+    path_in_repo = "/".join(p for p in (args.prefix.strip("/"), tail) if p)
     hf_model = output / "_hf_export" / (f"final" if args.final else f"step{step}")
     log.info("%scheckpoint: %s -> hf://%s%s", "FINAL " if args.final else "", checkpoint, args.repo,
              f"/{path_in_repo}" if path_in_repo else "")
@@ -286,6 +289,8 @@ def watch(args: argparse.Namespace) -> int:
               "--tokenizer", args.tokenizer, "--shard-size", args.shard_size, "--retries", str(args.retries)]
     if args.run_name:
         single += ["--run-name", args.run_name]
+    if args.prefix:
+        single += ["--prefix", args.prefix]
     if args.private:
         single.append("--private")
 
@@ -334,6 +339,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--repo", required=True, help="Target HF model repo id, e.g. user/olmo3-32b-sft-128k.")
     p.add_argument("--run-name", "--run_name", dest="run_name", default=os.environ.get("RUN_NAME", ""),
                    help="Scope discovery to …/olmo-sft/<run_name>/step* (avoids picking a prior run's ckpt on a shared volume).")
+    p.add_argument("--prefix", default=os.environ.get("OLMO_HF_UPLOAD_PREFIX", ""),
+                   help="Path prefix inside the HF repo: uploads land at <repo>/<prefix>/step<N> and <repo>/<prefix> (final). Empty = repo root.")
     p.add_argument("--watch", action="store_true", help="Background poll loop (converts+ships each new checkpoint).")
     p.add_argument("--final", action="store_true",
                    help="One-shot end-of-run ship: upload the latest checkpoint to the repo ROOT even if marked.")
