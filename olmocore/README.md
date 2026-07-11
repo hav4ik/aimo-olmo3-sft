@@ -423,6 +423,18 @@ python /usr/local/bin/train.py --seq-len 131072 --max-tokens-per-rank 16384 \
 `8192` would be cp16, invalid since 16 ∤ 40. shard-over-16 → ~24 GB floor → ~51 GB/rank; skip_step+bf16
 optimizer is the default.)
 
+**64× H100 (80 GB), 256K — same recipe, 2× the per-rank tokens:**
+```bash
+OLMO_NODES_PER_FSDP_GROUP=2 OLMO_GRAD_REDUCE_DTYPE=bf16 \
+python /usr/local/bin/train.py --seq-len 262144 --max-tokens-per-rank 32768 \
+    --cp-style ulysses --ac-budget 0
+```
+(`--max-tokens-per-rank 32768` → still cp8 = 32768 tok/rank, since CP is capped at 8 by the KV heads — so
+256K just doubles the per-rank tokens vs 128K, ~42 GB of activations. That fixed activation cost means
+1 node can't fit it (40 GB floor + 42 GB > 80); **2 nodes is the minimum** (~20 GB floor → ~62 GB/rank),
+`--nodes-per-fsdp-group 4` for more headroom (~10 GB floor → ~52 GB). Prefer the narrower group (2) if it
+fits — less inter-node all-gather = faster. See the node-sizing table above.)
+
 **65K without CP** (teammate's H200 shape, ported): shard over all GPUs, `--cp-style` cp=1
 (`--max-tokens-per-rank ≥ seq_len`), `OLMO_NODES_PER_FSDP_GROUP=<#nodes>`. Simpler — no Ulysses, no
 sink-CP interaction. 128K needs CP regardless (no-CP activations exceed 80 GB).
