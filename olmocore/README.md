@@ -318,6 +318,28 @@ checkpoints only sit on WEKA/local disk.
 - Runtime-cloned (`run.sh` + `upload.py`) — **works with the current image, no rebuild** (the
   `--hf-upload-prefix` *flag* form bakes on the next build; the `OLMO_HF_UPLOAD_PREFIX` env works today).
 
+**Smoke-test the upload in a short run.** Even **`--max-steps 10` uploads a model**: olmo-core's
+checkpointer saves a **final permanent checkpoint at end-of-run** (`post_train`, whenever the last step is
+past the previous save), so the **final upload ships it** to `<repo>/<prefix>` (repo root) — you do *not*
+need to reach the 1000-step `save-interval`. The per-checkpoint *watcher* stays quiet in a 10-step run (no
+mid-run checkpoint), so the FINAL upload is what you'll see. Add the upload knobs to the run:
+
+```yaml
+  command:
+  - python
+  - /usr/local/bin/train.py
+  - --max-steps=10
+  - --seq-len=65536
+  - --max-tokens-per-rank=16384
+  - --cp-style=ulysses
+  - --ac-budget=0
+  - --hf-upload-repo=<hf-user>/olmo3-smoke     # HF_TOKEN secret needs WRITE scope
+```
+The final convert+ship of the 32B runs **after** step 10 (CPU distcp→HF convert + ~64 GB upload = a few
+minutes) — watch `hf_upload_watcher.log` on the WEKA mount + the tail of run-rank0. To also exercise the
+*watcher* (intermediate uploads to `step<N>/`), add `--save-interval=5 --hf-upload-interval=60` so a
+mid-run checkpoint is saved and polled while training is still going.
+
 ---
 
 ## Model & data
