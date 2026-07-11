@@ -150,6 +150,9 @@ def test_no_other_wide_norm_site_left_behind():
 def test_swapped_config_actually_builds_a_fused_rmsnorm():
     """A green config-string test must not hide a non-constructible norm — build the swapped configs."""
     pytest.importorskip("flash_attn")
+    import torch
+    if not torch.cuda.is_available():
+        pytest.skip("FusedRMSNorm is a flash-attn triton kernel — needs a CUDA device to build")
     cfg = _cfg()
     sft._maybe_use_fused_rmsnorm(cfg, small_smem=True, env_val=None)
     # build at the two real widths: block/lm_head over d_model, and q_norm over n_heads*head_dim.

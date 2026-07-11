@@ -441,6 +441,29 @@ sink-CP interaction. 128K needs CP regardless (no-CP activations exceed 80 GB).
 
 ---
 
+## Unit tests (sink / FA2 / FA3 / Ulysses / CP)
+
+One script runs every attention-sink, FA2/FA3, Ulysses-CP, ring, RoPE and RMSNorm test — olmo_core's own
+suite (baked in the image) plus this recipe's fused-RMSNorm tests:
+
+```bash
+docker run --rm --gpus all --entrypoint bash \
+    chankhavu/olmo3-olmocore:cu128-fa2-sink \
+    /data/training/code/olmocore/run_tests.sh
+```
+
+- Needs **`--gpus all`** — the sink/FA2/FA3 numeric tests build real kernels; without a GPU they error, not skip.
+- **1 GPU** exercises the sink/flash/RoPE/norm tests; the **Ulysses / ring / context-parallel** suites self-skip
+  unless **≥2 GPUs** are visible (they spawn a small distributed group) — run on an 8-GPU box to cover them.
+- `--self-check` also runs the standalone kernel consistency check (eager vs FA2/FA3, FA2 vs FA3) — the same
+  one `OLMO_ATTN_SELFCHECK=1` runs as a pre-training pre-flight.
+- `--quick` skips the distributed suites; extra args (`-k sink`, `-x`, `-v`) forward to pytest.
+
+The script lives in this repo (cloned to `/data/training/code` at runtime), so it tracks the branch you run —
+no rebuild to update tests.
+
+---
+
 ## Running on AI2 Beaker
 
 The image runs on Beaker as a custom Docker image (see the TL;DR spec above). Use
