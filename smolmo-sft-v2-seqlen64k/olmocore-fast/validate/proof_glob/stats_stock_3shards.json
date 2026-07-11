@@ -1,0 +1,38 @@
+{
+  "timestamp": "2026-06-10 01:49:19",
+  "output_directory": "/work/out_ref3",
+  "configuration": {
+    "tokenizer": "allenai/Olmo-3-7B-Think",
+    "max_sequence_length": 65536,
+    "chat_template": "olmo_thinker"
+  },
+  "per_dataset_statistics": [
+    {
+      "dataset_name": "/work/ref3.parquet",
+      "dataset_split": "train",
+      "initial_instances": 9000,
+      "instances_after_transformation": 9000,
+      "instances_filtered_during_transformation": 0,
+      "frac_or_num_samples": 1.0,
+      "original_dataset_size": 9000,
+      "is_upsampled": false,
+      "upsampling_factor": 1.0,
+      "final_instances_in_output": 9000,
+      "final_tokens_in_output": 122003488,
+      "final_trainable_tokens_in_output": 109791917,
+      "instances_filtered_after_tokenization": 0,
+      "avg_tokens_per_instance": 13555.943111111112,
+      "percentage_of_total_tokens": 100.0,
+      "percentage_of_total_instances": 100.0
+    }
+  ],
+  "overall_statistics": {
+    "total_datasets": 1,
+    "total_instances": 9000,
+    "total_tokens": 122003488,
+    "trainable_tokens": 109791917,
+    "trainable_percentage": 89.99080173838965,
+    "instances_filtered": 0,
+    "average_sequence_length": 13555.943111111112
+  }
+}

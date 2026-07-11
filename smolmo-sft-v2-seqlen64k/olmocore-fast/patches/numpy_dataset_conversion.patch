@@ -1,0 +1,15 @@
+--- /tmp/oi_src/numpy_dataset_conversion.py	2026-05-31 14:13:18.000000000 -0700
++++ patches/numpy_dataset_conversion.PATCHED.py	2026-06-09 19:38:28.815425374 -0700
+@@ -253,7 +253,11 @@
+         drop_dataset_source=False,
+     )
+ 
+-    train_dataset = train_dataset.shuffle(seed=shuffle_seed)
++    # ORDER-ONLY: skip the internal reshuffle when SMOLMO_NO_SHUFFLE=1 (deterministic, seed-free
++    # multi-node output). Per-sequence tokens/masks are unchanged; only sequence ORDER differs,
++    # and olmo-core reshuffles documents at train time regardless.
++    if os.environ.get("SMOLMO_NO_SHUFFLE") != "1":
++        train_dataset = train_dataset.shuffle(seed=shuffle_seed)
+ 
+     if visualize:
+         logger.info("Visualizing first example...")

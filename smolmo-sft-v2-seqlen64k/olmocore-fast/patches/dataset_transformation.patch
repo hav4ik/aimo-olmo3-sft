@@ -1,0 +1,46 @@
+--- /tmp/oi_src/dataset_transformation.py	2026-05-31 14:13:18.000000000 -0700
++++ patches/dataset_transformation.PATCHED.py	2026-06-09 22:28:58.133881398 -0700
+@@ -45,6 +45,7 @@
+ 
+ import copy
+ import hashlib
++import glob
+ import json
+ import multiprocessing
+ import os
+@@ -1613,10 +1614,21 @@
+             dataset = load_dataset(
+                 "json", data_files=self.dataset_name, split=self.dataset_split, num_proc=max_num_processes()
+             )
+-        elif os.path.exists(self.dataset_name) and self.dataset_name.endswith(".parquet"):
++        elif self.dataset_name.endswith(".parquet") and (
++            os.path.exists(self.dataset_name) or "," in self.dataset_name or glob.glob(self.dataset_name)
++        ):
+             assert self.dataset_split == "train", "Only train split is supported for local parquet files."
++            # Accept: single file | comma-separated list | glob pattern. Make ordering DETERMINISTIC
++            # (sorted) rather than relying on the datasets lib's internal sort, and fail loudly on no match.
++            if "," in self.dataset_name:
++                _df = [p for p in self.dataset_name.split(",") if p]
++            elif os.path.exists(self.dataset_name):
++                _df = self.dataset_name
++            else:
++                _df = sorted(glob.glob(self.dataset_name))
++            assert _df, f"No parquet files matched: {self.dataset_name}"
+             dataset = load_dataset(
+-                "parquet", data_files=self.dataset_name, split=self.dataset_split, num_proc=max_num_processes()
++                "parquet", data_files=_df, split=self.dataset_split, num_proc=max_num_processes()
+             )
+         else:
+             # commit hash only works for hf datasets
+@@ -1979,7 +1991,10 @@
+                     trainable_tokens = sum(1 for label in sample[LABELS_KEY] if label != MASKED_TOKEN_VALUE)
+                     return {"token_count": token_count, "label_token_count": trainable_tokens}
+ 
+-                token_count_dataset = dataset.map(count_tokens, batched=False)
++                # bound the stats counter by the CONFIGURED budget (BEAKER_ASSIGNED_CPU_COUNT = PROCS),
++                # NOT max_num_processes() — that grabs all affinity CPUs and OOMs on big boxes (256 workers).
++                _cnt_proc = max(1, int(float(os.environ.get("BEAKER_ASSIGNED_CPU_COUNT", max_num_processes()))))
++                token_count_dataset = dataset.map(count_tokens, batched=False, num_proc=_cnt_proc)
+                 total_tokens = sum(token_count_dataset["token_count"])
+                 trainable_tokens = sum(token_count_dataset["label_token_count"])
+                 stats["total_tokens"] = total_tokens

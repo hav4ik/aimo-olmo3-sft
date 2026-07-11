@@ -1,0 +1,6 @@
+# validation scratch / large artifacts (kept out of git; reproducible via validate/)
+validate/work/
+*.npy
+*.bin
+.hf/
+image/__pycache__/
