@@ -46,7 +46,7 @@ NPROC="${NPROC_PER_NODE:-$(nvidia-smi -L | wc -l)}"
 : "${MASTER_ADDR:?[olmocore] not set — rendezvous host (node 0's address)}"
 : "${MASTER_PORT:?[olmocore] not set — rendezvous port}"
 # Model + recipe by size (the EXPERIMENT/MODEL_SIZE front-end sets MODEL_SIZE; explicit env wins).
-MODEL_SIZE="${MODEL_SIZE:-7b}"
+MODEL_SIZE="${MODEL_SIZE:-32b}"   # this branch trains the 32B sink deploy model by default
 # DEF_KEEP = default cap on persistent checkpoints kept on disk (distcp ~100 GB/7B, ~251 GB/32B). On a
 # ~1 TB disk shared with a ~200 GB dataset, the 32B can only afford 2 checkpoints total: 32B keep 1
 # (1 persistent ~251 GB + 1 rotating ephemeral ~251 GB = ~502 GB, leaving room for data + an in-flight
@@ -62,9 +62,19 @@ MODEL_SIZE="${MODEL_SIZE:-7b}"
 case "$MODEL_SIZE" in
     1b)  HF_MODEL="${HF_MODEL:-allenai/OLMo-2-0425-1B-Instruct}"; MODEL_ARCH="${MODEL_ARCH:-olmo2_1b_v2}"; DEF_LR=5e-5; DEF_GBS=4096;    DEF_KEEP=1; DEF_SFT=Olmo-2-1B-SFT-local.py;  DEF_SEQ_LEN=4096 ;;
     7b)  HF_MODEL="${HF_MODEL:-allenai/Olmo-3-7B-Think}";    MODEL_ARCH="${MODEL_ARCH:-olmo3_7b}";  DEF_LR=5e-5; DEF_GBS=1572864; DEF_KEEP=2; DEF_SFT=Olmo-3-7B-SFT-local.py;  DEF_SEQ_LEN=65536 ;;  # GBS 1.5M == 32B (divides for WORLD_SIZE 2/3/4/6 at cp=4)
-    32b) HF_MODEL="${HF_MODEL:-chankhavu/yccchen-olmo3-deploy}"; MODEL_ARCH="${MODEL_ARCH:-olmo3_32b}"; DEF_LR=5e-5; DEF_GBS=1572864; DEF_KEEP=3; DEF_SFT=Olmo-3-32B-SFT-local.py; DEF_SEQ_LEN=65536 ;;  # sink deploy model (trained sinks); base = allenai/Olmo-3.1-32B-Think. GBS 1.5M -> divides WORLD_SIZE 2/3/4/6 (cp=4); lr 5e-5 between linear/sqrt of AI2's 1e-4@4.19M
+    32b) HF_MODEL="${HF_MODEL:-chankhavu/yccchen-olmo3-deploy}"; MODEL_ARCH="${MODEL_ARCH:-olmo3_32b}"; DEF_LR=5e-5; DEF_GBS=1572864; DEF_KEEP=3; DEF_SFT=Olmo-3-32B-SFT-bf16.py; DEF_SEQ_LEN=65536 ;;  # FP8-free bf16 sink recipe on the deploy model (trained sinks + deepseek tok); base=allenai/Olmo-3.1-32B-Think. GBS 1.5M -> divides WORLD_SIZE 2/3/4/6 (cp=4); lr 5e-5 between linear/sqrt of AI2's 1e-4@4.19M
     *)   echo "ERROR: MODEL_SIZE='$MODEL_SIZE' (want 1b|7b|32b)"; exit 2 ;;
 esac
+# The 32B deploy model (chankhavu/yccchen-olmo3-deploy) is an Olmo-3 WITH per-head attention sinks and a
+# DEEPSEEK tokenizer — so for MODEL_SIZE=32b, default sink ON and the tokenizer to the model's own (reuse
+# HF_MODEL => deepseek), and the dataset to its tokenized SFT data. Without these a bare-entrypoint launch
+# would drop the trained sinks / use the wrong (dolma2) tokenizer. Explicit env always wins; train.py
+# already sets all three.
+if [ "$MODEL_SIZE" = "32b" ]; then
+    OLMO_USE_SINK="${OLMO_USE_SINK:-1}"
+    OLMO_HF_TOKENIZER="${OLMO_HF_TOKENIZER:-1}"   # 1 => reuse HF_MODEL's tokenizer (deepseek), NOT dolma2
+    DATASET_HF="${DATASET_HF:-chankhavu/yccchen-stage2-olmocore-256k-v2}"
+fi
 # FP8-FREE 32B recipe: SFT_SCRIPT_NAME=Olmo-3-32B-SFT-bf16.py MODEL_SIZE=32b — a copy of the 32B
 # script with all FP8 code removed (the Olmo-3 authors flagged FP8 SFT as too reckless; it raises if
 # OLMO_FP8 is set). bootstrap.sh already downloads it with the repo.

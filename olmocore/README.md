@@ -30,7 +30,7 @@ tasks:
   - --epochs=2
   replicas: 8                                 # 8 nodes; × gpuCount 8 = 64 GPUs
   leaderSelection: true                       # REQUIRED — the rendezvous shim needs the leader hostname
-  hostNetworking: true                        # REQUIRED for InfiniBand + WEKA-root writes
+  hostNetworking: true                        # REQUIRED for InfiniBand (RDMA); WEKA mounts don't need it
   propagateFailure: true
   propagatePreemption: true
   synchronizedStartTimeout: 15m
@@ -48,8 +48,7 @@ tasks:
   - { name: NCCL_SOCKET_IFNAME, value: ib }              # InfiniBand (jupiter)
   - { name: NCCL_IB_HCA,        value: "^=mlx5_bond_0" }  # InfiniBand HCA (jupiter)
   - { name: OLMO_HF_UPLOAD_REPO, value: <hf-user>/olmo3-32b-sft-128k }  # auto-ship each ckpt to HF (HF_TOKEN needs WRITE scope)
-  result:
-    path: /results                            # small logs only — NOT the 251 GB checkpoints
+  # (no result.path: nothing writes /results — logs + checkpoints live on the WEKA mount below)
   timeout: 48h
 ```
 
@@ -153,7 +152,9 @@ flag the baked `train.py` doesn't have yet.
   `rank_microbatch` each. Grad-accum = `gbs / (rank_microbatch × dp_world)`.
 
 **Activation memory scales with per-device tokens**, not seq-len — that's why CP is how you fit long
-context. Constraint: `cp_degree` must divide `n_heads` (40 → cp ∈ {1,2,4,5,8,…}) for Ulysses.
+context. Constraint: Ulysses scatters the head axis for q AND k/v, so `cp_degree` must divide
+`gcd(n_heads, n_kv_heads) = gcd(40, 8) = 8` → **cp ∈ {1,2,4,8}** (the `n_kv_heads=8` GQA bound is tighter
+than 40; e.g. cp=5 is invalid).
 
 ---
 
@@ -180,8 +181,12 @@ context. Constraint: `cp_degree` must divide `n_heads` (40 → cp ∈ {1,2,4,5,8
 | 4 | 32 | ~12 GB |
 | = #nodes (all) | all | ~5 GB |
 
-Wider shard = lower floor, but the FSDP all-gather crosses more nodes (inter-node IB vs NVLink). The
-sweet spot is a group of 2–4 nodes: fits the model, keeps most heavy comm local.
+Wider shard = lower floor, but the FSDP all-gather crosses more nodes (inter-node IB vs NVLink). Note at
+**cp8 the shard all-gather is entirely inter-node** anyway — cp is the fastest-varying mesh dim, so all 8
+GPUs of a node form one CP group and the `dp_shard` dim strides across nodes (there's no intra-node
+sharding left to keep local). So pick the group width by how much floor you must shed vs how much
+inter-node all-gather you can afford; 2–4 nodes/group is the usual balance (fits the model without going
+full-mesh), not a comm-locality win.
 
 ---
 
@@ -352,10 +357,22 @@ sink-CP interaction. 128K needs CP regardless (no-CP activations exceed 80 GB).
 
 ## Running on AI2 Beaker
 
-The image runs on Beaker as a custom Docker image. **Omit `command:`** in the spec so Beaker runs the
-image's ENTRYPOINT (`bootstrap.sh`) as-is — it clones the recipe and downloads model+data at runtime
-(Beaker jobs have outbound network). `bootstrap.sh` auto-maps Beaker's rendezvous env, so **you set
-nothing extra for multi-node**:
+The image runs on Beaker as a custom Docker image (see the TL;DR spec above). Use
+**`command: [python, /usr/local/bin/train.py, --flags…]`** (the TL;DR form): `train.py` sets the run
+env from its `--flags` — including the identity defaults `MODEL_SIZE=32b`, the bf16 SFT script, sink on,
+the deepseek tokenizer — then execs `bootstrap.sh`, so the rendezvous shim still runs.
+
+> ⚠️ Do **NOT** omit `command:` and try to configure via `envVars` alone unless you set the *full*
+> identity set — `MODEL_SIZE=32b`, `SFT_SCRIPT_NAME=Olmo-3-32B-SFT-bf16.py`, `SEQ_LEN`, `OLMO_CP_STYLE`,
+> `OLMO_USE_SINK=1`, `OLMO_HF_TOKENIZER=1`, `DATASET_HF`, plus every tuning knob. With the bare ENTRYPOINT
+> and none of these, `run.sh` falls back to its **7B / 65536 / ring** defaults and silently trains the
+> wrong model at the wrong context. The `command: train.py` form gives you all of them for free — prefer it.
+>
+> `command: train.py --flags` needs the flags **baked** in the image you pull. The current pushed image
+> has them all; **`docker pull` the latest `cu128-fa2-sink` first.** (Recipe *logic* — run.sh, the sft
+> script — is cloned at runtime, so only new `train.py --flags` ever need a fresh image.)
+
+`bootstrap.sh` auto-maps Beaker's rendezvous env, so **you set nothing extra for multi-node**:
 
 | Beaker injects | mapped to |
 |---|---|
@@ -365,13 +382,22 @@ nothing extra for multi-node**:
 
 Single-node = `resources.gpuCount: 8`. Multi-node = `replicas: N` + **`leaderSelection: true`** +
 `hostNetworking: true` + `propagateFailure/Preemption: true` (leaderSelection is required or the leader
-hostname is unset and torchrun can't rendezvous — `bootstrap.sh` warns if so). Tuning knobs go in
-`envVars` as their `OLMO_*` form (e.g. `{name: OLMO_NODES_PER_FSDP_GROUP, value: "4"}`).
+hostname is unset and torchrun can't rendezvous — `bootstrap.sh` warns if so). Put the run's knobs in the
+`command: train.py --flags` list (TL;DR); any knob also has an `OLMO_*` env you can add to `envVars`.
 
 - **Storage:** mount a WEKA bucket **read-write** at `/data/training` (`datasets: [{mountPath:
-  /data/training, source: {weka: <bucket>}}]`) — that's where checkpoints land and persist. Don't use
-  result-datasets for the ~251 GB distcp checkpoints; `result.path` is for small logs only.
+  /data/training, source: {weka: <bucket>}}]`) — that's where checkpoints land and persist. Don't route
+  the ~251 GB distcp checkpoints through a `result` dataset. Nothing in the chain writes to `/results`
+  (logs go to `/data/training/logs` on WEKA), so a `result.path` is optional and will be near-empty —
+  omit it, or point it at a real artifact.
+- **Resume:** the trainer auto-loads the latest checkpoint under `save_folder` on start
+  (`load_strategy` + `maybe_load_checkpoint`). If Beaker's `timeout` (e.g. 48h) kills a still-training
+  32B (the download + one-time HF→distcp convert + compile eat into the first window), just re-submit the
+  **same** spec with the **same WEKA mount + `RUN_NAME`** — it picks up from the last ephemeral/persistent
+  checkpoint. Give long runs a generous `timeout` or plan to resume.
 - **Secrets:** `beaker secret write HF_TOKEN …`, then `envVars: [{name: HF_TOKEN, secret: HF_TOKEN}]`.
+  For HF checkpoint auto-upload, the token needs **WRITE** scope.
 - **Cluster:** target H100 (sm_90) — the image supports it. InfiniBand user-space libs are baked, so
-  multi-node uses IB once the fabric env + device access are set (see *InfiniBand* in the TL;DR; on
-  jupiter: `NCCL_SOCKET_IFNAME=ib`, `NCCL_IB_HCA=^=mlx5_bond_0`, `hostNetworking: true`).
+  multi-node uses IB once the fabric env + device access are set (see *InfiniBand* in the TL;DR). The
+  jupiter values (`NCCL_SOCKET_IFNAME=ib`, `NCCL_IB_HCA=^=mlx5_bond_0`) are **examples** — confirm against
+  AI2's current cluster guidance; a wrong `NCCL_SOCKET_IFNAME` makes NCCL hang at init rather than fall back.
