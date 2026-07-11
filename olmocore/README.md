@@ -94,12 +94,12 @@ Everything above holds — widen the window, the per-rank cap, and the FSDP grou
                                 #   puts 4x the per-rank tokens of 64K onto each GPU
   - --nodes-per-fsdp-group=8    # was 4 — shard the floor as WIDE as possible (measured: see below)
 ```
-**Measured on 8× H100 (80 GB): one node fits at most ~64K (8192 tok/rank).** Per-rank activations are set by
-`seq_len ÷ cp` and **cp is capped at 8**, so 256K lands 32768 tok/rank — 4× a 64K node — and widening the
-FSDP group only lowers the *floor*, not the activations. So push the floor to its minimum: **`--nodes-per-fsdp-group=8`
-(64-GPU shard group → ~5 GB floor)** gives the most activation headroom. `4` likely also fits (~10 GB floor)
-but verify; `2` is too tight at 256K. Everything else — `flash_2`, `ulysses`, `ac 0`, optimizer — is identical
-to the 128K spec.
+**Measured on 8× H100 (80 GB):** a single node can't complete a training *step* for the 32B at all (fp32-master
+floor ~48 GB + overhead + optimizer transient OOMs at `optim_step`); it holds forward/backward up to ~64K but
+not the step. So every real run is multi-node. Per-rank activations are set by `seq_len ÷ cp` and **cp is capped
+at 8**, so 256K lands 32768 tok/rank and widening the FSDP group only lowers the *floor*, not the activations —
+push the floor to its minimum: **`--nodes-per-fsdp-group=8` (64-GPU shard → ~6 GB floor).** `4` likely also
+fits; `2` is too tight at 256K. Everything else — `flash_2`, `ulysses`, `ac 0`, optimizer — matches the 128K spec.
 
 **Every knob for this run, and whether it's already the default** — the command passes the non-default
 knobs (plus `--epochs`/`--gbs`, called out because they matter); drop any to fall back, or add any
@@ -287,22 +287,25 @@ Two independent drivers, and they don't substitute:
 - **Activations** shrink with CP — but **CP is capped at 8** (the 8 KV heads), so per-rank tokens = `seq_len÷8`
   regardless of node count. **More nodes cut only the floor, never the activations.**
 
-**Calibrated to a measurement:** on 8× H100 (80 GB), **one node fits at most ~64K** (8192 tok/rank) with the
-default memory config. That anchors the per-rank activation higher than a paper estimate (fixed overhead —
-torch.compile workspace, fused-LCE lm_head, NCCL, fragmentation — dominates, so activations don't shrink much
-below ~38 GB even at short context). Numbers below are calibrated to that anchor, not idealized.
+**Calibrated to measurements on 8× H100 (80 GB).** The 32B's per-rank **optimizer floor with the default fp32
+master is ~48 GB** on an 8-way shard (bf16 params 8 + fp32 master 16 + bf16 grad 8 + bf16 m/v 16). Add ~15–25 GB
+of persistent overhead (torch.compile workspace, fused-LCE, NCCL, fragmentation) **plus the optimizer's foreach
+update transient**, and a single node cannot complete a training *step* at any seq len — an OOM at
+`_foreach_div` in `optim_step`, not in attention. (One node holds *forward/backward* up to ~64K, but the first
+optimizer step tips it over.) So **1 node is not viable for a real run; shard across ≥2 nodes.**
 
-| nodes (GPUs) | floor/rank | 64K (act ~38) | **128K** (act ~43) | **256K** (act ~53) |
-|---|---|---|---|---|
-| 1 (8)  | 40 GB | **~78 GB ✅ (measured max)** | ~83 GB ❌ | ~93 GB ❌ |
-| 2 (16) | 20 GB | — | **~63 GB ✅** | ~73 GB ⚠️ tight |
-| 4 (32) | 10 GB | — | ~53 GB ✅ | ~63 GB ✅ |
-| **8 (64)** | 5 GB  | — | ~48 GB ✅ | **~58 GB ✅ roomy** |
+| nodes (GPUs) | floor/rank (fp32 master) | full step fits? |
+|---|---|---|
+| 1 (8)  | ~48 GB | ❌ optimizer step OOMs (fwd/bwd alone ≤ ~64K) |
+| 2 (16) | ~24 GB | ✅ 64K / 128K |
+| 4 (32) | ~12 GB | ✅ 128K, ✅ 256K |
+| **8 (64)** | ~6 GB | ✅ 256K roomy |
 
-- **64K → 1 node** (measured ceiling).
-- **128K → 2 nodes minimum** (16 GPUs); 4 for margin. 1 node does **not** fit (only 64K does).
-- **256K → 4 nodes for comfort, 8 to be safe** (per-rank activations ~53 GB are *fixed* by cp8, so push the
-  floor to its minimum). 2 nodes is too tight; 1 node impossible.
+- **1 node → smoke only, and only with `--model-dtype bfloat16`** (bf16 master, ~-8 GB, no stochastic rounding —
+  pipeline test, not a trustworthy loss). A real fp32-master step needs ≥2 nodes.
+- **128K → 2 nodes minimum** (4 for margin).
+- **256K → `--nodes-per-fsdp-group 8` recommended** (4 likely OK; per-rank activations are *fixed* by cp8, so
+  push the floor to its minimum). 2 nodes too tight.
 
 ```bash
 # 128K on 2 nodes
