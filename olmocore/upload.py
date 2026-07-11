@@ -339,8 +339,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--repo", required=True, help="Target HF model repo id, e.g. user/olmo3-32b-sft-128k.")
     p.add_argument("--run-name", "--run_name", dest="run_name", default=os.environ.get("RUN_NAME", ""),
                    help="Scope discovery to …/olmo-sft/<run_name>/step* (avoids picking a prior run's ckpt on a shared volume).")
-    p.add_argument("--prefix", default=os.environ.get("OLMO_HF_UPLOAD_PREFIX", ""),
-                   help="Path prefix inside the HF repo: uploads land at <repo>/<prefix>/step<N> and <repo>/<prefix> (final). Empty = repo root.")
+    p.add_argument("--prefix", default=os.environ.get("OLMO_HF_UPLOAD_PREFIX", "ycchen-olmo32b-ds-sft"),
+                   help="Path prefix inside the HF repo: uploads land at <repo>/<prefix>/step<N> and <repo>/<prefix> (final). Default 'ycchen-olmo32b-ds-sft'; pass '' for the repo root.")
     p.add_argument("--watch", action="store_true", help="Background poll loop (converts+ships each new checkpoint).")
     p.add_argument("--final", action="store_true",
                    help="One-shot end-of-run ship: upload the latest checkpoint to the repo ROOT even if marked.")

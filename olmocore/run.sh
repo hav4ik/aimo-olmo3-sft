@@ -323,6 +323,11 @@ UPLOAD_WATCHER_PID=""
 # tokenizer: OLMO_TOKENIZER_HF (set when OLMO_HF_TOKENIZER=<id>/1), else HF_MODEL itself (carries the
 # deepseek tokenizer). Never fall back to dolma2 here (would export a wrong tokenizer).
 _UPLOAD_TOKENIZER="${OLMO_TOKENIZER_HF:-$HF_MODEL}"
+# Upload path prefix inside the repo. Default = a run-unique name so re-runs don't overwrite each other
+# (like the FP8/NII run): <base>-<YYYYMMDDHHMMSS>. Computed ONCE here (NOT per poll) so every checkpoint
+# of THIS run lands under the same prefix. An explicit OLMO_HF_UPLOAD_PREFIX is used verbatim (then you own
+# uniqueness). Passed to both the watcher and the final upload so they agree.
+_UPLOAD_PREFIX="${OLMO_HF_UPLOAD_PREFIX:-ycchen-olmo32b-ds-sft-$(date +%Y%m%d%H%M%S)}"
 _reap_watcher() { [ -n "$UPLOAD_WATCHER_PID" ] && kill -TERM "$UPLOAD_WATCHER_PID" 2>/dev/null || true; }
 if [ -n "${OLMO_HF_UPLOAD_REPO:-}" ] && [ "$THIS_NODE_RANK" -eq 0 ]; then
     if [ -z "${HF_TOKEN:-}" ]; then
@@ -334,7 +339,7 @@ if [ -n "${OLMO_HF_UPLOAD_REPO:-}" ] && [ "$THIS_NODE_RANK" -eq 0 ]; then
         echo "[olmocore] HF upload watcher -> ${OLMO_HF_UPLOAD_REPO} (poll ${OLMO_HF_UPLOAD_INTERVAL:-300}s, log $UPLOAD_LOG)"
         CUDA_VISIBLE_DEVICES="" nohup python "$UPLOAD_PY" --watch \
             --output "$OLMO_SFT_SAVE_ROOT" --repo "$OLMO_HF_UPLOAD_REPO" --run-name "$RUN_NAME" \
-            --prefix "${OLMO_HF_UPLOAD_PREFIX:-}" \
+            --prefix "$_UPLOAD_PREFIX" \
             --seq-len "${SEQ_LEN:-65536}" --tokenizer "$_UPLOAD_TOKENIZER" \
             > "$UPLOAD_LOG" 2>&1 &
         UPLOAD_WATCHER_PID=$!
@@ -377,7 +382,7 @@ if [ -n "${OLMO_HF_UPLOAD_REPO:-}" ] && [ "$THIS_NODE_RANK" -eq 0 ] && [ -n "${H
     fi
     CUDA_VISIBLE_DEVICES="" python "$UPLOAD_PY" --final \
         --output "$OLMO_SFT_SAVE_ROOT" --repo "$OLMO_HF_UPLOAD_REPO" --run-name "$RUN_NAME" \
-        --prefix "${OLMO_HF_UPLOAD_PREFIX:-}" \
+        --prefix "$_UPLOAD_PREFIX" \
         --seq-len "${SEQ_LEN:-65536}" --tokenizer "$_UPLOAD_TOKENIZER" \
         || echo "[olmocore] WARN: final HF upload failed — the distcp checkpoint is still on disk/WEKA."
 fi
