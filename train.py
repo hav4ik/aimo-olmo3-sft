@@ -107,8 +107,11 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     for dest, env, helptxt in _MAP:
+        # Precedence: explicit --flag > inherited `-e ENV` > _DEFAULTS. Seeding the argparse default from
+        # os.environ means a value the user passed via `docker run -e ENV=…` is NOT clobbered by our hard
+        # default when they don't also pass the flag (a real footgun otherwise, e.g. -e HF_MODEL=… ignored).
         p.add_argument("--" + dest.replace("_", "-"), dest=dest,
-                       default=_DEFAULTS.get(dest), help=f"-> {env}: {helptxt}")
+                       default=os.environ.get(env, _DEFAULTS.get(dest)), help=f"-> {env}: {helptxt}")
     p.add_argument("--dry-run", action="store_true", help="print the resolved env and exit")
     args = p.parse_args()
 

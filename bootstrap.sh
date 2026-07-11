@@ -20,15 +20,21 @@ set -euo pipefail
 #   BEAKER_REPLICA_COUNT -> WORLD_SIZE   BEAKER_REPLICA_RANK -> GLOBAL_RANK
 #   BEAKER_LEADER_REPLICA_HOSTNAME -> MASTER_ADDR (needs leaderSelection+replicas>1+hostNetworking)
 if [ -n "${BEAKER_REPLICA_COUNT:-}" ]; then
-    if [ "${BEAKER_REPLICA_COUNT}" -gt 1 ] && [ -z "${BEAKER_LEADER_REPLICA_HOSTNAME:-}" ] && [ -z "${MASTER_ADDR:-}" ]; then
-        echo "[bootstrap] WARN: BEAKER_REPLICA_COUNT=$BEAKER_REPLICA_COUNT but BEAKER_LEADER_REPLICA_HOSTNAME is unset — set leaderSelection:true + hostNetworking:true in the Beaker spec, or torchrun can't find the master node."
-    fi
+    # `-gt` on a non-numeric value errors under set -e's `[`; guard so a stray value can't abort here.
+    case "${BEAKER_REPLICA_COUNT}" in
+        ''|*[!0-9]*) ;;  # non-numeric — skip the multi-node leader check
+        *) if [ "${BEAKER_REPLICA_COUNT}" -gt 1 ] && [ -z "${BEAKER_LEADER_REPLICA_HOSTNAME:-}" ] && [ -z "${MASTER_ADDR:-}" ]; then
+               echo "[bootstrap] WARN: BEAKER_REPLICA_COUNT=$BEAKER_REPLICA_COUNT but BEAKER_LEADER_REPLICA_HOSTNAME is unset — set leaderSelection:true + hostNetworking:true in the Beaker spec, or torchrun can't find the master node."
+           fi ;;
+    esac
     export WORLD_SIZE="${WORLD_SIZE:-$BEAKER_REPLICA_COUNT}"
     export GLOBAL_RANK="${GLOBAL_RANK:-${BEAKER_REPLICA_RANK:-0}}"
     export MASTER_ADDR="${MASTER_ADDR:-${BEAKER_LEADER_REPLICA_HOSTNAME:-127.0.0.1}}"
     export MASTER_PORT="${MASTER_PORT:-29400}"
     echo "[bootstrap] Beaker rendezvous (BEAKER_REPLICA_*): WORLD_SIZE=$WORLD_SIZE GLOBAL_RANK=$GLOBAL_RANK MASTER_ADDR=$MASTER_ADDR MASTER_PORT=$MASTER_PORT"
-elif env | grep -q '^BEAKER_' && [ -z "${WORLD_SIZE:-}" ]; then
+# grep -c (not -q): -q closes the pipe on first match and can SIGPIPE `env` under pipefail, which would
+# wrongly skip this branch and abort at run.sh's WORLD_SIZE check. -c reads all of env, || true keeps it 0.
+elif [ -z "${WORLD_SIZE:-}" ] && [ "$(env | grep -c '^BEAKER_' || true)" -gt 0 ]; then
     # Single-replica Beaker job (no BEAKER_REPLICA_*): default to a single node.
     export WORLD_SIZE=1 GLOBAL_RANK=0 MASTER_ADDR=127.0.0.1 MASTER_PORT=29400
     echo "[bootstrap] Beaker single-node (no BEAKER_REPLICA_*): WORLD_SIZE=1 GLOBAL_RANK=0 MASTER_ADDR=127.0.0.1 MASTER_PORT=29400"

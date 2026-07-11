@@ -41,8 +41,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && ldconfig \
     && ldconfig -p | grep -q 'libibverbs\.so' \
-    && ls /usr/lib/x86_64-linux-gnu/libibverbs/libmlx5* >/dev/null 2>&1 \
-    && echo "[ib] user-space RDMA stack installed (libibverbs + mlx5 provider)"
+    && ( ls /usr/lib/*/libibverbs/libmlx5* >/dev/null 2>&1 \
+         && echo "[ib] user-space RDMA stack installed (libibverbs + mlx5 provider)" \
+         || echo "[ib] WARN: mlx5 provider .so not found under /usr/lib/*/libibverbs/ — IB may fall back to TCP at runtime" )
 
 # Context-parallel (ring) attention dependency. OLMo-core's FA2 backend requires ring-flash-attn for
 # CP — our DEFAULT path (cp=4 auto-engages at seq 65536). It's a pure-Python wrapper over the baked
