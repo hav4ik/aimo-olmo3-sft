@@ -64,7 +64,10 @@ tasks:
   saved output in-place — FA3's strict autograd rejects that in backward (`…modified by an inplace
   operation … output 0 of FlashAttnVarlenFuncBackward … version 1; expected 0`). **FA2 uses the same
   post-correction but its backward tolerates it**, so `flash_2` trains correctly (identical sink math). This
-  is why the image is tagged `fa2-sink`. (`OLMO_ATTN_BACKEND=flash_2` is the env equivalent.)
+  is why the image is tagged `fa2-sink`. (`OLMO_ATTN_BACKEND=flash_2` is the env equivalent.) FA2 is
+  **verified, not just crash-free**: `test_fa2_sink` checks its fwd + `dq/dk/dv/dsink` against an eager
+  reference, and the post-correction math (`attention_sink_test.py`) passes on-GPU. Confirm on your box with
+  `OLMO_ATTN_SELFCHECK=1` (runs the FA2 fwd+bwd-vs-eager check as a pre-flight and aborts on divergence).
 - **Rendezvous is automatic** — `bootstrap.sh` maps `BEAKER_REPLICA_COUNT/RANK/LEADER_REPLICA_HOSTNAME` →
   `WORLD_SIZE`/`GLOBAL_RANK`/`MASTER_ADDR` (needs `leaderSelection: true`). Nothing to set by hand.
 - **Memory** — shard across 4 nodes (32 GPUs) → ~12 GB optimizer floor; `--ac-budget 0` recomputes all
@@ -80,6 +83,23 @@ tasks:
 - **Secrets** — `beaker secret write HF_TOKEN <val>` (+ `WANDB_API_KEY`) in the same workspace first.
 
 skip_step + bf16 moments and fused-LCE are the defaults — no need to pass them.
+
+### For 256K context (same spec, change 3 flags)
+
+Everything above holds — widen the window, the per-rank cap, and the FSDP group:
+
+```yaml
+  - --seq-len=262144            # was 131072
+  - --max-tokens-per-rank=32768 # was 16384 — still cp8 (CP capped at 8 by the KV heads), so 256K
+                                #   puts 4x the per-rank tokens of 64K onto each GPU
+  - --nodes-per-fsdp-group=8    # was 4 — shard the floor as WIDE as possible (measured: see below)
+```
+**Measured on 8× H100 (80 GB): one node fits at most ~64K (8192 tok/rank).** Per-rank activations are set by
+`seq_len ÷ cp` and **cp is capped at 8**, so 256K lands 32768 tok/rank — 4× a 64K node — and widening the
+FSDP group only lowers the *floor*, not the activations. So push the floor to its minimum: **`--nodes-per-fsdp-group=8`
+(64-GPU shard group → ~5 GB floor)** gives the most activation headroom. `4` likely also fits (~10 GB floor)
+but verify; `2` is too tight at 256K. Everything else — `flash_2`, `ulysses`, `ac 0`, optimizer — is identical
+to the 128K spec.
 
 **Every knob for this run, and whether it's already the default** — the command passes the non-default
 knobs (plus `--epochs`/`--gbs`, called out because they matter); drop any to fall back, or add any
@@ -267,25 +287,28 @@ Two independent drivers, and they don't substitute:
 - **Activations** shrink with CP — but **CP is capped at 8** (the 8 KV heads), so per-rank tokens = `seq_len÷8`
   regardless of node count. **More nodes cut only the floor, never the activations.**
 
-| nodes (GPUs) | floor/rank | **128K** total (act ~27 GB) | **256K** total (act ~42 GB) |
-|---|---|---|---|
-| 1 (8)  | 40 GB | ~67 GB ⚠️ borderline | ~82 GB ❌ |
-| **2 (16)** | 20 GB | **~47 GB ✅** | **~62 GB ✅** |
-| 4 (32) | 10 GB | ~37 GB ✅ | ~52 GB ✅ roomy |
-| 8 (64) | 5 GB  | ~32 GB | ~47 GB |
+**Calibrated to a measurement:** on 8× H100 (80 GB), **one node fits at most ~64K** (8192 tok/rank) with the
+default memory config. That anchors the per-rank activation higher than a paper estimate (fixed overhead —
+torch.compile workspace, fused-LCE lm_head, NCCL, fragmentation — dominates, so activations don't shrink much
+below ~38 GB even at short context). Numbers below are calibrated to that anchor, not idealized.
 
-*(The ~27 GB @128K activation is validated against a real 94 GiB OOM: that run used adamw8bit = fp32
-moments ≈ 64 GB floor, and 94 − 64 ≈ 30 GB of activations.)*
+| nodes (GPUs) | floor/rank | 64K (act ~38) | **128K** (act ~43) | **256K** (act ~53) |
+|---|---|---|---|---|
+| 1 (8)  | 40 GB | **~78 GB ✅ (measured max)** | ~83 GB ❌ | ~93 GB ❌ |
+| 2 (16) | 20 GB | — | **~63 GB ✅** | ~73 GB ⚠️ tight |
+| 4 (32) | 10 GB | — | ~53 GB ✅ | ~63 GB ✅ |
+| **8 (64)** | 5 GB  | — | ~48 GB ✅ | **~58 GB ✅ roomy** |
 
-- **128K → 2 nodes** (16 GPUs). 1 node is borderline (~67 GB nominal, ±10 GB of NCCL/frag can tip it over).
-- **256K → 2 nodes minimum** (~62 GB), **4 for comfort**. 1 node cannot: activations alone (~42 GB) + a
-  40 GB floor exceeds 80 GB.
+- **64K → 1 node** (measured ceiling).
+- **128K → 2 nodes minimum** (16 GPUs); 4 for margin. 1 node does **not** fit (only 64K does).
+- **256K → 4 nodes for comfort, 8 to be safe** (per-rank activations ~53 GB are *fixed* by cp8, so push the
+  floor to its minimum). 2 nodes is too tight; 1 node impossible.
 
 ```bash
 # 128K on 2 nodes
---seq-len 131072 --max-tokens-per-rank 16384 --nodes-per-fsdp-group 2 --ac-budget 0
-# 256K on 2 nodes (or --nodes-per-fsdp-group 4 for margin)
---seq-len 262144 --max-tokens-per-rank 32768 --nodes-per-fsdp-group 2 --ac-budget 0
+--seq-len 131072 --max-tokens-per-rank 16384 --nodes-per-fsdp-group 2 --ac-budget 0 --attn-backend flash_2
+# 256K — shard the floor as wide as possible (8-node group = 64-GPU shard, ~5 GB floor)
+--seq-len 262144 --max-tokens-per-rank 32768 --nodes-per-fsdp-group 8 --ac-budget 0 --attn-backend flash_2
 ```
 
 Because CP maxes at 8, activation cost is **fixed per seq-len** — beyond the minimum that fits, more nodes
