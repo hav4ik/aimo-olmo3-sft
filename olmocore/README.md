@@ -23,6 +23,7 @@ tasks:
   - --seq-len=131072
   - --max-tokens-per-rank=16384               # cp8 = 16384 tok/rank (max Ulysses CP for 40 heads @ 128K)
   - --cp-style=ulysses
+  - --attn-backend=flash_2                    # REQUIRED on H100 — see note below (auto-picks FA3, which crashes in backward)
   - --ac-budget=0                            # recompute all = least activation memory (raise to 0.3 if you have headroom)
   - --nodes-per-fsdp-group=4                  # shard the 32B floor across 4 nodes (32 GPUs)
   - --grad-reduce-dtype=bf16
@@ -58,6 +59,12 @@ tasks:
   timeout: 48h
 ```
 
+- **⚠️ Force `--attn-backend flash_2` on H100 (`sm_90`).** Auto-pick chooses **FA3** on Hopper, but this
+  image ships **stock FA3**, so the per-head sink runs as an exact *post-correction* that overwrites flash's
+  saved output in-place — FA3's strict autograd rejects that in backward (`…modified by an inplace
+  operation … output 0 of FlashAttnVarlenFuncBackward … version 1; expected 0`). **FA2 uses the same
+  post-correction but its backward tolerates it**, so `flash_2` trains correctly (identical sink math). This
+  is why the image is tagged `fa2-sink`. (`OLMO_ATTN_BACKEND=flash_2` is the env equivalent.)
 - **Rendezvous is automatic** — `bootstrap.sh` maps `BEAKER_REPLICA_COUNT/RANK/LEADER_REPLICA_HOSTNAME` →
   `WORLD_SIZE`/`GLOBAL_RANK`/`MASTER_ADDR` (needs `leaderSelection: true`). Nothing to set by hand.
 - **Memory** — shard across 4 nodes (32 GPUs) → ~12 GB optimizer floor; `--ac-budget 0` recomputes all
@@ -90,7 +97,7 @@ knobs (plus `--epochs`/`--gbs`, called out because they matter); drop any to fal
 | `--optim-dtype bf16` | bf16 | ✅ default | bf16 moments, ~16 GB/rank less |
 | `--fused-lce 1` | 1 | ✅ default | no materialized logits, ~10 GB+ |
 | `--fused-rmsnorm` (omit) | auto | ✅ default | auto-off on H100 (big smem) |
-| `--attn-backend` (omit) | auto | ✅ default | flash_3 on H100 by arch |
+| `--attn-backend flash_2` | flash_2 | **no** (auto→flash_3) | **REQUIRED on H100** — FA3's stock sink post-correction crashes in backward; FA2 is backward-safe (same math) |
 | `--sink 1` | 1 | ✅ default | per-head attention sink |
 | `--epochs 2` | 2 | ✅ default | shown because it matters; `--max-steps` overrides |
 | `--gbs 4194304` | 4.19M | **no** (1.57M) | tokens/optimizer step; matches AI2's reference batch |
@@ -417,7 +424,7 @@ mid-run checkpoint is saved and polled while training is still going.
 ```bash
 OLMO_NODES_PER_FSDP_GROUP=2 OLMO_GRAD_REDUCE_DTYPE=bf16 \
 python /usr/local/bin/train.py --seq-len 131072 --max-tokens-per-rank 16384 \
-    --cp-style ulysses --ac-budget 0
+    --cp-style ulysses --ac-budget 0 --attn-backend flash_2   # flash_2 REQUIRED on H100 (FA3 sink crashes in backward)
 ```
 (`--max-tokens-per-rank 16384` → cp8 = 16384 tok/rank, the max Ulysses CP for 40 heads at 128K;
 `8192` would be cp16, invalid since 16 ∤ 40. shard-over-16 → ~24 GB floor → ~51 GB/rank; skip_step+bf16
@@ -427,7 +434,7 @@ optimizer is the default.)
 ```bash
 OLMO_NODES_PER_FSDP_GROUP=2 OLMO_GRAD_REDUCE_DTYPE=bf16 \
 python /usr/local/bin/train.py --seq-len 262144 --max-tokens-per-rank 32768 \
-    --cp-style ulysses --ac-budget 0
+    --cp-style ulysses --ac-budget 0 --attn-backend flash_2   # flash_2 REQUIRED on H100 (FA3 sink crashes in backward)
 ```
 (`--max-tokens-per-rank 32768` → still cp8 = 32768 tok/rank, since CP is capped at 8 by the KV heads — so
 256K just doubles the per-rank tokens vs 128K, ~42 GB of activations. That fixed activation cost means
