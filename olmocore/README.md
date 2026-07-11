@@ -243,6 +243,38 @@ already on. No liger SwiGLU/RoPE/RMSNorm.
 To go below ~40 GB floor on 8 GPUs you **must** shard wider (`--nodes-per-fsdp-group`) or CPU-offload —
 those are the only additive levers left.
 
+### How many nodes to fit 128K vs 256K (H100 80 GB)
+
+Two independent drivers, and they don't substitute:
+- **Floor** (model+optimizer) shrinks with nodes: `floor/rank ≈ 322 GB ÷ (nodes×8)`.
+- **Activations** shrink with CP — but **CP is capped at 8** (the 8 KV heads), so per-rank tokens = `seq_len÷8`
+  regardless of node count. **More nodes cut only the floor, never the activations.**
+
+| nodes (GPUs) | floor/rank | **128K** total (act ~27 GB) | **256K** total (act ~42 GB) |
+|---|---|---|---|
+| 1 (8)  | 40 GB | ~67 GB ⚠️ borderline | ~82 GB ❌ |
+| **2 (16)** | 20 GB | **~47 GB ✅** | **~62 GB ✅** |
+| 4 (32) | 10 GB | ~37 GB ✅ | ~52 GB ✅ roomy |
+| 8 (64) | 5 GB  | ~32 GB | ~47 GB |
+
+*(The ~27 GB @128K activation is validated against a real 94 GiB OOM: that run used adamw8bit = fp32
+moments ≈ 64 GB floor, and 94 − 64 ≈ 30 GB of activations.)*
+
+- **128K → 2 nodes** (16 GPUs). 1 node is borderline (~67 GB nominal, ±10 GB of NCCL/frag can tip it over).
+- **256K → 2 nodes minimum** (~62 GB), **4 for comfort**. 1 node cannot: activations alone (~42 GB) + a
+  40 GB floor exceeds 80 GB.
+
+```bash
+# 128K on 2 nodes
+--seq-len 131072 --max-tokens-per-rank 16384 --nodes-per-fsdp-group 2 --ac-budget 0
+# 256K on 2 nodes (or --nodes-per-fsdp-group 4 for margin)
+--seq-len 262144 --max-tokens-per-rank 32768 --nodes-per-fsdp-group 2 --ac-budget 0
+```
+
+Because CP maxes at 8, activation cost is **fixed per seq-len** — beyond the minimum that fits, more nodes
+only add headroom/throughput, not longer context. Only more KV heads (higher CP cap) or activation offload
+would unlock past that.
+
 ---
 
 ## Activation checkpointing
