@@ -1,0 +1,8 @@
+# Generated eval outputs — never commit these (large; regenerate with run_bench.sh)
+traces/
+*.log
+__pycache__/
+*.pyc
+
+# Local secrets — keep your real endpoints out of git
+ENDPOINTS.yaml

@@ -1,0 +1,5 @@
+# Eval harness dependencies (Python 3.10+)
+openai>=1.30          # OpenAI-compatible client (talks to your vLLM/SGLang endpoint)
+httpx>=0.27           # streaming + sandbox HTTP
+math-verify>=0.5      # MathArena-standard symbolic answer verifier (grade_bench*.py)
+sympy>=1.12           # fallback equivalence check in grade_bench.py

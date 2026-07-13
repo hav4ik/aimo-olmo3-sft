@@ -1,0 +1,14 @@
+# Example endpoint registry. Copy to ENDPOINTS.yaml (git-ignored) and fill in your
+# own serving endpoints + keys. Nothing here is read automatically — run_bench.sh and
+# run_eval.py take --server_addr / --api_key / --model_name (or the OLMO_* env vars).
+# This file is just a convenient place to keep the addresses of the models you serve.
+
+- friendly_name: step17000
+  model: chankhavu/smolmo-32b-nvfp4-step17000
+  api_key: <YOUR_API_KEY>
+  addr: <HOST>:<PORT>
+
+- friendly_name: proofpilot
+  model: chankhavu/smolmo-32b-sft-merged-proofpilot-nvfp4
+  api_key: <YOUR_API_KEY>
+  addr: <HOST>:<PORT>
